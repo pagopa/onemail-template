@@ -1,0 +1,113 @@
+name: Publish templates
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - templates/**
+      - retirements/**
+      - scripts/**
+      - .github/workflows/publish-templates.yml
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Configured protected repository environment
+        type: choice
+        options: [dev, uat, prod]
+        required: true
+      operation:
+        description: Publish active versions or explicitly retire one reviewed request
+        type: choice
+        options: [publish, retire]
+        default: publish
+        required: true
+      retirement_request:
+        description: Exact retained retirements/product/logical-vN.json path (retire only)
+        type: string
+        required: false
+      authorize_retirement:
+        description: Accept queued-send and new-submission risk; drain timing is unresolved
+        type: boolean
+        default: false
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: template-lifecycle-${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Direct SES lifecycle
+    if: github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    environment: ${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TARGET_ENVIRONMENT: ${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
+      ACCOUNT_ID: ${{ vars.ACCOUNT_ID }}
+      REGISTRY_TABLE: ${{ vars.REGISTRY_TABLE }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      OPERATION: ${{ inputs.operation || 'publish' }}
+      RETIREMENT_REQUEST: ${{ inputs.retirement_request }}
+      AUTHORIZE_RETIREMENT: ${{ inputs.authorize_retirement }}
+    steps:
+      - name: Checkout approved immutable source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check protected main and environment configuration before OIDC
+        shell: bash
+        env:
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main && "$REF_PROTECTED" == true ]]
+          git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main'
+          [[ "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]]
+          case "$TARGET_ENVIRONMENT" in dev|uat|prod) ;; *) printf 'Configure repository PUBLISH_ENVIRONMENT as dev, uat, or prod.\n' >&2; exit 1 ;; esac
+          [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+          [[ "$REGISTRY_TABLE" =~ ^[A-Za-z0-9_.-]{3,255}$ ]]
+          [[ "$AWS_ROLE_ARN" == "arn:aws:iam::$ACCOUNT_ID:role/"* ]]
+          arguments=(--input-dir . --env "$TARGET_ENVIRONMENT" --no-prefix --dry-run)
+          if [[ "$OPERATION" == retire ]]; then
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$AUTHORIZE_RETIREMENT" == true && -n "$RETIREMENT_REQUEST" ]]
+            arguments+=(--retire --file "$RETIREMENT_REQUEST" --retirement-authorization queued-send-risk-accepted)
+          else
+            [[ "$OPERATION" == publish && -z "$RETIREMENT_REQUEST" ]]
+          fi
+          bash scripts/upload-ses-templates.sh "${arguments[@]}"
+
+      - name: Assume environment-scoped lifecycle role
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2 https://github.com/aws-actions/configure-aws-credentials/releases/tag/v4.0.2
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: template-lifecycle-${{ github.run_id }}
+          aws-region: eu-south-1
+          mask-aws-account-id: true
+
+      - name: Publish or retire directly in both SES regions
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=(--input-dir . --env "$TARGET_ENVIRONMENT" --no-prefix
+            --account-id "$ACCOUNT_ID" --table-name "$REGISTRY_TABLE" --approved-ref "$GITHUB_SHA")
+          if [[ "$OPERATION" == retire ]]; then
+            arguments+=(--retire --file "$RETIREMENT_REQUEST" --retirement-authorization queued-send-risk-accepted)
+          fi
+          bash scripts/upload-ses-templates.sh "${arguments[@]}"
+
+      - name: Report lifecycle outcome
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          printf 'Lifecycle result: %s\n\nTarget: %s; operation: %s.\n\nBoth SES regions must complete before primary metadata mutation. Failed operations may leave partial SES work; rerun latest main forward. No rollback deletion.\n' "$JOB_STATUS" "$TARGET_ENVIRONMENT" "$OPERATION" >> "$GITHUB_STEP_SUMMARY"
