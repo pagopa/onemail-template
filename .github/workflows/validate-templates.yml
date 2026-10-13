@@ -1,0 +1,121 @@
+name: Validate templates
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: template-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  filenames:
+    name: Path gate and immutable contract
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_templates: ${{ steps.paths.outputs.has_templates }}
+    steps:
+      - name: Checkout candidate data
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gate changed filenames before reading contents
+        id: paths
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          template_pattern='^templates/[a-z][a-z0-9]*(-[a-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*/v[1-9][0-9]*/template\.json$'
+          retirement_pattern='^retirements/[a-z][a-z0-9]*(-[a-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*-v[1-9][0-9]*\.json$'
+          has_assets=false
+          has_templates=false
+          git -C candidate rev-parse --verify "$BASE_REF^{commit}" > /dev/null
+          while IFS= read -r -d '' path; do
+            if [[ ! "$path" =~ $template_pattern && ! "$path" =~ $retirement_pattern ]]; then
+              printf 'Invalid asset path %s: expected templates/<product>/<logical>/v<positive-integer>/template.json or retirements/<product>/<logical>-v<positive-integer>.json; lowercase kebab case, no leading zeros.\n' "$path" >&2
+              exit 1
+            fi
+            current=candidate
+            IFS=/ read -r -a components <<< "$path"
+            for component in "${components[@]}"; do
+              current="$current/$component"
+              if [[ -L "$current" ]]; then
+                printf 'Symlink asset rejected: %s\n' "$path" >&2
+                exit 1
+              fi
+            done
+            if [[ ! -f "candidate/$path" ]]; then
+              printf 'Asset deleted: %s; retain versions and retirement requests.\n' "$path" >&2
+              exit 1
+            fi
+            has_assets=true
+            if [[ "$path" == templates/* ]]; then has_templates=true; fi
+          done < <(git -C candidate diff --name-only --no-renames -z "$BASE_REF" -- templates/ retirements/)
+          printf 'has_assets=%s\nhas_templates=%s\n' "$has_assets" "$has_templates" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted base validator
+        if: steps.paths.outputs.has_assets == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: tooling
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Validate changed assets with trusted base tooling
+        if: steps.paths.outputs.has_assets == 'true'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f tooling/scripts/validate-templates.sh ]]; then
+            printf '%s\n' 'Merge lifecycle tooling before submitting assets; do not execute candidate PR scripts.' >&2
+            exit 1
+          fi
+          bash tooling/scripts/validate-templates.sh --input-dir candidate --base-ref "$BASE_REF"
+
+  sanitize:
+    name: Production sanitizer and Handlebars syntax
+    needs: filenames
+    if: needs.filenames.outputs.has_templates == 'true'
+    permissions:
+      contents: read
+    uses: pagopa/onemail/.github/workflows/validate-templates.yml@03fae304d9ceeda80f0271426a29de41b563e249
+    with:
+      source_ref: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.event.pull_request.base.sha }}
+      tooling_ref: 03fae304d9ceeda80f0271426a29de41b563e249
+
+  required:
+    name: Template validation
+    needs: [filenames, sanitize]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Require contract and selected sanitizer checks
+        shell: bash
+        env:
+          PATH_RESULT: ${{ needs.filenames.result }}
+          SANITIZER_RESULT: ${{ needs.sanitize.result }}
+          HAS_TEMPLATES: ${{ needs.filenames.outputs.has_templates }}
+        run: |
+          set -euo pipefail
+          [[ "$PATH_RESULT" == success ]]
+          if [[ "$HAS_TEMPLATES" == true ]]; then
+            [[ "$SANITIZER_RESULT" == success ]]
+          else
+            [[ "$SANITIZER_RESULT" == skipped ]]
+          fi
