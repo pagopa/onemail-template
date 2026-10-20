@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   filenames:
-    name: Path gate and immutable contract
+    name: Path gate and template contract
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
@@ -36,14 +36,18 @@ jobs:
         run: |
           set -euo pipefail
           template_pattern='^templates/[a-z][a-z0-9]*(-[a-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*/v[1-9][0-9]*/template\.json$'
-          retirement_pattern='^retirements/[a-z][a-z0-9]*(-[a-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*-v[1-9][0-9]*\.json$'
           has_assets=false
           has_templates=false
           git -C candidate rev-parse --verify "$BASE_REF^{commit}" > /dev/null
-          while IFS= read -r -d '' path; do
-            if [[ ! "$path" =~ $template_pattern && ! "$path" =~ $retirement_pattern ]]; then
-              printf 'Invalid asset path %s: expected templates/<product>/<logical>/v<positive-integer>/template.json or retirements/<product>/<logical>-v<positive-integer>.json; lowercase kebab case, no leading zeros.\n' "$path" >&2
+          while IFS= read -r -d '' change_type && IFS= read -r -d '' path; do
+            if [[ ! "$path" =~ $template_pattern ]]; then
+              printf 'Invalid asset path %s: expected templates/<product>/<logical>/v<positive-integer>/template.json; lowercase kebab case, no leading zeros.\n' "$path" >&2
               exit 1
+            fi
+            has_assets=true
+            if [[ "$change_type" == D ]]; then
+              git -C candidate cat-file -e "$BASE_REF:$path" || { printf 'Deleted template was not present in the PR base: %s\n' "$path" >&2; exit 1; }
+              continue
             fi
             current=candidate
             IFS=/ read -r -a components <<< "$path"
@@ -55,12 +59,11 @@ jobs:
               fi
             done
             if [[ ! -f "candidate/$path" ]]; then
-              printf 'Asset deleted: %s; retain versions and retirement requests.\n' "$path" >&2
+              printf 'Template asset is missing: %s\n' "$path" >&2
               exit 1
             fi
-            has_assets=true
-            if [[ "$path" == templates/* ]]; then has_templates=true; fi
-          done < <(git -C candidate diff --name-only --no-renames -z "$BASE_REF" -- templates/ retirements/)
+            has_templates=true
+          done < <(git -C candidate diff --name-status --no-renames -z "$BASE_REF" -- templates/)
           printf 'has_assets=%s\nhas_templates=%s\n' "$has_assets" "$has_templates" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted base validator
