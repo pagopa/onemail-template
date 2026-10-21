@@ -5,118 +5,110 @@ on:
         branches: [main]
         paths:
             - templates/**
-            - scripts/**
-            - .github/workflows/publish-templates.yml
     workflow_dispatch:
         inputs:
             environment:
-                description: Configured protected repository environment
+                description: Environment to publish
                 type: choice
                 options: [dev, uat, prod]
-                required: true
-            operation:
-                description: Publish active versions or retire a template deleted through a pull request
-                type: choice
-                options: [publish, retire]
-                default: publish
-                required: true
-            removed_template:
-                description: Exact deleted templates/product/logical/vN/template.json path (retire only)
-                type: string
-                required: false
-            authorize_retirement:
-                description: Accept queued-send and new-submission risk; drain timing is unresolved
-                type: boolean
-                default: false
                 required: true
 
 permissions: {}
 
-concurrency:
-    group: template-lifecycle-${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
-    cancel-in-progress: false
-
 jobs:
-    publish:
-        name: Direct SES lifecycle
-        if: github.ref == 'refs/heads/main' && github.ref_protected
+    changes:
+        name: Prepare changed templates and environment matrix
         runs-on: ubuntu-22.04
-        timeout-minutes: 30
-        environment: ${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
+        timeout-minutes: 5
         permissions:
             contents: read
-            id-token: write
-        env:
-            TARGET_ENVIRONMENT: ${{ inputs.environment || vars.PUBLISH_ENVIRONMENT }}
-            CHANGE_BASE: ${{ github.event.before }}
-            ACCOUNT_ID: ${{ vars.ACCOUNT_ID }}
-            REGISTRY_TABLE: ${{ vars.REGISTRY_TABLE }}
-            AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-            OPERATION: ${{ inputs.operation || 'publish' }}
-            REMOVED_TEMPLATE: ${{ inputs.removed_template }}
-            AUTHORIZE_RETIREMENT: ${{ inputs.authorize_retirement }}
+        outputs:
+            matrix: ${{ steps.matrix.outputs.matrix }}
+            changed_files: ${{ steps.changes.outputs.all_changed_and_modified_files }}
+            deleted_files: ${{ steps.changes.outputs.deleted_files }}
         steps:
-            - name: Checkout approved source
+            - name: Checkout
               uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
               with:
-                  ref: ${{ github.sha }}
                   fetch-depth: 0
                   persist-credentials: false
 
-            - name: Check protected main and environment configuration before OIDC
+            - name: Setup Environment Matrix
+              id: matrix
+              uses: pagopa/onemail/.github/actions/env-matrix@fd8261bc069dd711e8c517c0e022efc38c8b7da9 # onemail fd8261b https://github.com/pagopa/onemail/commit/fd8261bc069dd711e8c517c0e022efc38c8b7da9
+              with:
+                  event_name: ${{ github.event_name }}
+                  environment_input: ${{ inputs.environment }}
+
+            - name: Resolve change base
+              id: base
               shell: bash
-              env:
-                  REF_PROTECTED: ${{ github.ref_protected }}
               run: |
                   set -euo pipefail
-                  [[ "$GITHUB_REF" == refs/heads/main && "$REF_PROTECTED" == true ]]
-                  git fetch --quiet origin '+refs/heads/main:refs/remotes/origin/main'
-                  [[ "$(git rev-parse origin/main)" == "$GITHUB_SHA" ]]
-                  case "$TARGET_ENVIRONMENT" in dev|uat|prod) ;; *) printf 'Configure repository PUBLISH_ENVIRONMENT as dev, uat, or prod.\n' >&2; exit 1 ;; esac
-                  [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
-                  [[ "$REGISTRY_TABLE" =~ ^[A-Za-z0-9_.-]{3,255}$ ]]
-                  [[ "$AWS_ROLE_ARN" == "arn:aws:iam::$ACCOUNT_ID:role/"* ]]
-                  arguments=(--input-dir . --env "$TARGET_ENVIRONMENT" --no-prefix --dry-run)
-                                    if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-                                        [[ "$OPERATION" == publish && -z "$REMOVED_TEMPLATE" && "$AUTHORIZE_RETIREMENT" != true ]]
-                                        if [[ -n "$CHANGE_BASE" && ! "$CHANGE_BASE" =~ ^0{40}$ ]]; then
-                                            arguments+=(--change-base "$CHANGE_BASE")
-                                        fi
-                                    elif [[ "$OPERATION" == retire ]]; then
-                                        [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$AUTHORIZE_RETIREMENT" == true && -n "$REMOVED_TEMPLATE" ]]
-                                        arguments+=(--retire --file "$REMOVED_TEMPLATE" --retirement-authorization queued-send-risk-accepted)
-                  else
-                                        [[ "$OPERATION" == publish && -z "$REMOVED_TEMPLATE" && "$AUTHORIZE_RETIREMENT" != true ]]
-                  fi
-                  bash scripts/upload-ses-templates.sh "${arguments[@]}"
+                  base_sha=$(git rev-parse "$GITHUB_SHA^")
+                  printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
 
-            - name: Assume environment-scoped lifecycle role
+            - name: Detect changed templates
+              id: changes
+              uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
+              with:
+                  base_sha: ${{ steps.base.outputs.sha }}
+                  sha: ${{ github.sha }}
+                  files: templates/**/template.json
+                  output_renamed_files_as_deleted_and_added: true
+                  json: true
+                  escape_json: false
+                  safe_output: false
+                  quotepath: false
+                  skip_initial_fetch: true
+                  fail_on_initial_diff_error: true
+
+    publish:
+        name: Publish templates - ${{ matrix.environment }}-${{ matrix.region }}
+        needs: changes
+        if: github.ref == 'refs/heads/main' && (needs.changes.outputs.changed_files != '[]' || needs.changes.outputs.deleted_files != '[]')
+        runs-on: ubuntu-22.04
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+        environment: ${{ matrix.environment == 'prod' && format('{0}/{1}', matrix.environment, matrix.region) || matrix.environment }}
+        concurrency:
+            group: ses-templates-${{ matrix.environment }}-${{ matrix.region }}
+            cancel-in-progress: false
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - name: Checkout
+              uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+              with:
+                  persist-credentials: false
+
+            - name: Configure AWS Credentials
+              id: aws
               uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2 https://github.com/aws-actions/configure-aws-credentials/releases/tag/v4.0.2
               with:
                   role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-                  role-session-name: template-lifecycle-${{ github.run_id }}
-                  aws-region: eu-south-1
-                  mask-aws-account-id: true
+                  aws-region: ${{ matrix.region }}
 
-            - name: Publish, update, or retire in both SES regions
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  arguments=(--input-dir . --env "$TARGET_ENVIRONMENT" --no-prefix
-                    --account-id "$ACCOUNT_ID" --table-name "$REGISTRY_TABLE" --approved-ref "$GITHUB_SHA")
-                                    if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-                                        if [[ -n "$CHANGE_BASE" && ! "$CHANGE_BASE" =~ ^0{40}$ ]]; then
-                                            arguments+=(--change-base "$CHANGE_BASE")
-                                        fi
-                                    elif [[ "$OPERATION" == retire ]]; then
-                                        arguments+=(--retire --file "$REMOVED_TEMPLATE" --retirement-authorization queued-send-risk-accepted)
-                  fi
-                  bash scripts/upload-ses-templates.sh "${arguments[@]}"
-
-            - name: Report lifecycle outcome
-              if: always()
+            - name: Synchronize changed and removed templates
               shell: bash
               env:
-                  JOB_STATUS: ${{ job.status }}
+                  ENV_SHORT: ${{ fromJSON('{"dev":"d","uat":"u","prod":"p"}')[matrix.environment] }}
+                  AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+                  AWS_TEMPLATE_DB_TABLE: ${{ vars.AWS_TEMPLATE_DB_TABLE }}
+                  CHANGED_FILES: ${{ needs.changes.outputs.changed_files }}
+                  DELETED_FILES: ${{ needs.changes.outputs.deleted_files }}
               run: |
-                  printf 'Lifecycle result: %s\n\nTarget: %s; operation: %s.\n\nBoth SES regions must complete before primary metadata mutation. Failed operations may leave partial SES work; rerun latest main forward. No rollback deletion.\n' "$JOB_STATUS" "$TARGET_ENVIRONMENT" "$OPERATION" >> "$GITHUB_STEP_SUMMARY"
+                  set -euo pipefail
+                  failed=false
+                  mapfile -t files < <(jq -r '.[]' <<< "$CHANGED_FILES")
+                  if [[ ${#files[@]} -gt 0 ]]; then
+                    bash scripts/upload-ses-templates.sh -e "$ENV_SHORT" "${files[@]}" || failed=true
+                  fi
+                  mapfile -t deleted < <(jq -r '.[]' <<< "$DELETED_FILES")
+                  if [[ ${#deleted[@]} -gt 0 ]]; then
+                    bash scripts/upload-ses-templates.sh -e "$ENV_SHORT" -d "${deleted[@]}" || failed=true
+                  fi
+                  [[ $failed == false ]]
