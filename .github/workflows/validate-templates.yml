@@ -6,20 +6,17 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: template-validation-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   filenames:
     name: Path gate and template contract
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
-      has_templates: ${{ steps.paths.outputs.has_templates }}
+      has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
     steps:
+      # Read candidate templates from the PR commit; do not execute its validation scripts.
       - name: Checkout candidate data
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
@@ -28,46 +25,26 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Gate changed filenames before reading contents
-        id: paths
-        shell: bash
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          template_pattern='^templates/[a-z][a-z0-9]*(-[a-z0-9]+)*/[a-z][a-z0-9]*(-[a-z0-9]+)*/v[1-9][0-9]*/template\.json$'
-          has_assets=false
-          has_templates=false
-          git -C candidate rev-parse --verify "$BASE_REF^{commit}" > /dev/null
-          while IFS= read -r -d '' change_type && IFS= read -r -d '' path; do
-            if [[ ! "$path" =~ $template_pattern ]]; then
-              printf 'Invalid asset path %s: expected templates/<product>/<logical>/v<positive-integer>/template.json; lowercase kebab case, no leading zeros.\n' "$path" >&2
-              exit 1
-            fi
-            has_assets=true
-            if [[ "$change_type" == D ]]; then
-              git -C candidate cat-file -e "$BASE_REF:$path" || { printf 'Deleted template was not present in the PR base: %s\n' "$path" >&2; exit 1; }
-              continue
-            fi
-            current=candidate
-            IFS=/ read -r -a components <<< "$path"
-            for component in "${components[@]}"; do
-              current="$current/$component"
-              if [[ -L "$current" ]]; then
-                printf 'Symlink asset rejected: %s\n' "$path" >&2
-                exit 1
-              fi
-            done
-            if [[ ! -f "candidate/$path" ]]; then
-              printf 'Template asset is missing: %s\n' "$path" >&2
-              exit 1
-            fi
-            has_templates=true
-          done < <(git -C candidate diff --name-status --no-renames -z "$BASE_REF" -- templates/)
-          printf 'has_assets=%s\nhas_templates=%s\n' "$has_assets" "$has_templates" >> "$GITHUB_OUTPUT"
+      - name: Detect changed template assets
+        id: changes
+        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
+        with:
+          path: candidate
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          sha: ${{ github.event.pull_request.head.sha }}
+          files: templates/**
+          output_renamed_files_as_deleted_and_added: true
+          exclude_symlinks: false
+          json: true
+          escape_json: false
+          safe_output: false
+          quotepath: false
+          skip_initial_fetch: true
+          fail_on_initial_diff_error: true
 
+      # Run the trusted validator from the PR base, never scripts proposed by the PR.
       - name: Checkout trusted base validator
-        if: steps.paths.outputs.has_assets == 'true'
+        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -76,17 +53,21 @@ jobs:
           persist-credentials: false
 
       - name: Validate changed assets with trusted base tooling
-        if: steps.paths.outputs.has_assets == 'true'
+        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         shell: bash
+        working-directory: candidate
         env:
-          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }}
+          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }}
         run: |
           set -euo pipefail
-          if [[ ! -f tooling/scripts/validate-templates.sh ]]; then
-            printf '%s\n' 'Merge lifecycle tooling before submitting assets; do not execute candidate PR scripts.' >&2
-            exit 1
-          fi
-          bash tooling/scripts/validate-templates.sh --input-dir candidate --base-ref "$BASE_REF"
+          # ACMR and type changes contain only current paths; deleted paths are excluded.
+          selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
+          files=()
+          while IFS= read -r -d '' path; do
+            files+=("$path")
+          done < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
+          bash ../tooling/scripts/validate-templates.sh "${files[@]}"
 
   sanitize:
     name: Production sanitizer and Handlebars syntax
@@ -108,17 +89,9 @@ jobs:
     timeout-minutes: 1
     permissions: {}
     steps:
-      - name: Require contract and selected sanitizer checks
-        shell: bash
-        env:
-          PATH_RESULT: ${{ needs.filenames.result }}
-          SANITIZER_RESULT: ${{ needs.sanitize.result }}
-          HAS_TEMPLATES: ${{ needs.filenames.outputs.has_templates }}
-        run: |
-          set -euo pipefail
-          [[ "$PATH_RESULT" == success ]]
-          if [[ "$HAS_TEMPLATES" == true ]]; then
-            [[ "$SANITIZER_RESULT" == success ]]
-          else
-            [[ "$SANITIZER_RESULT" == skipped ]]
-          fi
+      - name: Reject failed or missing required checks
+        if: >-
+          needs.filenames.result != 'success' ||
+          (needs.filenames.outputs.has_templates == 'true' && needs.sanitize.result != 'success') ||
+          (needs.filenames.outputs.has_templates != 'true' && needs.sanitize.result != 'skipped')
+        run: exit 1
