@@ -1,4 +1,4 @@
-name: Publish templates
+name: Sync templates
 
 on:
     push:
@@ -64,7 +64,7 @@ jobs:
                   fail_on_initial_diff_error: true
 
     publish:
-        name: Publish templates - ${{ matrix.environment }}-${{ matrix.region }}
+        name: Sync templates - ${{ matrix.environment }}-${{ matrix.region }}
         needs: changes
         if: github.ref == 'refs/heads/main' && (needs.changes.outputs.changed_files != '[]' || needs.changes.outputs.deleted_files != '[]')
         runs-on: ubuntu-22.04
@@ -105,10 +105,10 @@ jobs:
                   failed=false
                   mapfile -t files < <(jq -r '.[]' <<< "$CHANGED_FILES")
                   if [[ ${#files[@]} -gt 0 ]]; then
-                    bash scripts/upload-ses-templates.sh -e "$ENV_SHORT" "${files[@]}" || failed=true
+                    bash scripts/sync-ses-templates.sh -e "$ENV_SHORT" "${files[@]}" || failed=true
                   fi
                   mapfile -t deleted < <(jq -r '.[]' <<< "$DELETED_FILES")
                   if [[ ${#deleted[@]} -gt 0 ]]; then
-                    bash scripts/upload-ses-templates.sh -e "$ENV_SHORT" -d "${deleted[@]}" || failed=true
+                    bash scripts/sync-ses-templates.sh -e "$ENV_SHORT" -d "${deleted[@]}" || failed=true
                   fi
                   [[ $failed == false ]]

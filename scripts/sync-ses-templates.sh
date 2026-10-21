@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Purpose: Synchronize SES templates, tenant associations, and DynamoDB registry metadata.
 # Usage examples:
-#   bash scripts/upload-ses-templates.sh -e d templates/checkout/welcome/v1/template.json
-#   bash scripts/upload-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/payments/receipt/v1/template.json
-#   bash scripts/upload-ses-templates.sh -e d -d templates/checkout/welcome/v1/template.json
+#   bash scripts/sync-ses-templates.sh -e d templates/checkout/welcome/v1/template.json
+#   bash scripts/sync-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/payments/receipt/v1/template.json
+#   bash scripts/sync-ses-templates.sh -e d -d templates/checkout/welcome/v1/template.json
 # AWS credentials, AWS_REGION, and AWS_ACCOUNT_ID are supplied by the pipeline.
 set -euo pipefail
 
