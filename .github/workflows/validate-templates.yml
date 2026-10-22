@@ -10,11 +10,12 @@ jobs:
   filenames:
     name: Path gate and template contract
     runs-on: ubuntu-22.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
       has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
+      files: ${{ steps.validate.outputs.files }}
     steps:
       # Read candidate templates from the PR commit; do not execute its validation scripts.
       - name: Checkout candidate data
@@ -48,38 +49,61 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          path: tooling
+          path: template_checkout
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Validate changed assets with trusted base tooling
+      - name: Validate changed assets with trusted base template_checkout script
+        id: validate
         if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         shell: bash
         working-directory: candidate
         env:
           CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }}
           TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }}
+        # Merge and deduplicate current paths, preserve filenames, then run the trusted validator.
         run: |
           set -euo pipefail
-          # ACMR and type changes contain only current paths; deleted paths are excluded.
           selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
-          files=()
-          while IFS= read -r -d '' path; do
-            files+=("$path")
-          done < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
-          bash ../tooling/scripts/validate-templates.sh "${files[@]}"
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
+          bash ../template_checkout/scripts/validate-templates.sh "${files[@]}"
+          printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
   sanitize:
-    name: Production sanitizer and Handlebars syntax
+    name: Template HTML check via UAT API
     needs: filenames
     if: needs.filenames.outputs.has_templates == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
     permissions:
       contents: read
-    uses: pagopa/onemail/.github/workflows/validate-templates.yml@03fae304d9ceeda80f0271426a29de41b563e249
-    with:
-      source_ref: ${{ github.event.pull_request.head.sha }}
-      base_ref: ${{ github.event.pull_request.base.sha }}
-      tooling_ref: 03fae304d9ceeda80f0271426a29de41b563e249
+    steps:
+      - name: Checkout main branch sanitizer script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: main_checkout
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Checkout Pull Request templates
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: templates_checkout
+          sparse-checkout: templates
+          persist-credentials: false
+
+      - name: Sanitize changed templates
+        shell: bash
+        working-directory: templates_checkout
+        env:
+          FILES: ${{ needs.filenames.outputs.files }}
+          SANITIZER_URL: https://uat.onemail.pagopa.it/v1/emails/sanitize-template
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
+          bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}"
 
   required:
     name: Template validation
