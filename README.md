@@ -31,7 +31,7 @@ For example, `templates/ced/welcome-email/v1/template.json` must contain `"Templ
 }
 ```
 
-The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `Html` are required strings; `Text` is optional but recommended for accessibility and compatibility. Additional JSON fields are rejected.
+The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `Html` are required non-empty strings; `Text` is optional but recommended for accessibility and compatibility. Additional JSON fields are rejected.
 
 ### Naming Rules
 
@@ -40,98 +40,102 @@ The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `H
 | Product and logical template | Lowercase letters/numbers, separated by single hyphens; start with a letter | `ced`, `welcome-email` |
 | Version directory            | `v` followed by a positive integer, without leading zeros                   | `v1`, `v12`            |
 | Filename                     | Always exactly `template.json`                                              | Not `welcome.json`     |
-| TemplateName                 | Matches the path; at most 64 characters                                     | `ced_welcome-email_v1` |
+| TemplateName                 | Matches the path; SES requires at most 64 characters                         | `ced_welcome-email_v1` |
 
 Do not use symlinks, uppercase names, spaces, or path escapes. The PR checks filenames and paths **before reading template content** and reports the expected format if they are invalid.
+
+The local validator does not enforce the SES name-length limit; keep the complete derived name within 64 characters.
 
 The product folder also determines the SES tenant. For `templates/ced/...`, the tenant is `oml-d-tenant-ced` in dev, `oml-u-tenant-ced` in UAT, and `oml-p-tenant-ced` in production. Those tenants must already exist; adding a folder does not provision AWS resources. CODEOWNERS remains the source of repository ownership and review requirements.
 
 ## Check Your Changes Locally
 
-Requirements: Bash, Git, and jq. Run from the repository root, with an up-to-date `origin/main` reference:
+Requirements: Bash and jq; curl and network access to UAT are also needed for the HTML check. Run from the repository root and pass the files you want to check explicitly:
 
 ```bash
-# Validate changed assets, including their names, paths, and JSON schema.
-bash scripts/validate-templates.sh --input-dir . --base-ref origin/main
+# Validate names, paths, and JSON fields for one or more files.
+bash scripts/validate-templates.sh templates/ced/welcome-email/v1/template.json
 
-# Validate active assets and preview merged deletions without any AWS calls.
-bash scripts/upload-ses-templates.sh --input-dir . --env dev --no-prefix --dry-run --change-base origin/main
+# Check only the HTML content through the UAT template sanitizer.
+SANITIZER_URL=https://uat.onemail.pagopa.it/v1/emails/sanitize-template \
+  bash scripts/sanitize-templates.sh templates/ced/welcome-email/v1/template.json
 ```
 
-To check one file, use `--file templates/ced/welcome-email/v1/template.json`; add `--paths-only` to the validator for a filename/path-only check. To validate all current assets rather than only changes, omit `--base-ref`.
+Both scripts accept multiple positional file paths. They do not discover changed files or scan the repository automatically; the PR workflow selects the files. Run the format validator before the HTML check.
 
-Local checks validate JSON, naming, and paths. They do **not** prove AWS readiness or replace the PR's HTML sanitization and Handlebars syntax checks. No Node.js setup is needed for these local Bash commands.
+No Node.js setup or AWS credentials are needed for these checks. Local validation does not prove AWS readiness. Publication uses `scripts/sync-ses-templates.sh` through GitHub Actions with OIDC; there is no dry-run mode.
 
 ## What Happens In A PR?
 
-The **Template validation** check runs path/schema checks and calls a SHA-pinned workflow in `onemail` to check supported Handlebars syntax and HTML with the real production sanitizer.
+The **Validate templates** workflow selects added or changed assets under `templates/**`, validates their paths and JSON fields, then runs `scripts/sanitize-templates.sh` for the same file list. Deleted files are not read or sanitized. Validation scripts come from the PR base commit, not from the candidate branch.
 
-Meaningful sanitization changes fail the PR: fix the source HTML and rerun the checks. The workflow never silently rewrites your template, saves original/sanitized HTML copies, or publishes to AWS. PR jobs receive no AWS credentials. Required values and placeholder types are not inferred or checked at runtime by this feature.
+For each selected file, the script sends `TemplateContent.Html` as `htmlContent` to `POST https://uat.onemail.pagopa.it/v1/emails/sanitize-template`. This unauthenticated route is exposed only in dev and UAT. It accepts 10 to 500000 characters, converts unescaped placeholders (`{{{...}}}` and `{{& ...}}`) to escaped `{{...}}` placeholders before applying OneMail's HTML sanitizer, and returns HTTP 200 with `isSanitized: true` when either operation changes the content. It does not perform complete Handlebars syntax validation or check `Subject` and `Text` content.
 
-The sanitizer supports developer and CI modes; both produce console output only. CI exits with an error when sanitization changes the HTML. The Bash dry-run is not a substitute for that check.
+An HTTP error, invalid response, or `isSanitized: true` fails the check. Fix the source HTML and rerun; the workflow never rewrites templates, saves HTML copies, or publishes to AWS. It does not check out onemail code or install Node.js. PR jobs receive no AWS credentials. UAT availability is required for the HTML check.
+
+The aggregate **Template validation** check succeeds only when path/contract validation succeeds and the HTML check either succeeds or is correctly skipped because there are no selected templates. Require this check in branch protection.
 
 ## Publish And Verify
 
-Protected `main` pushes affecting assets or publication tooling trigger **Publish templates** in the environment selected by the repository's `PUBLISH_ENVIRONMENT` variable. Maintainers can also use **Actions > Publish templates > Run workflow**, select `main`, choose an environment, and set `operation` to `publish`. There is no separate release or promotion workflow.
+Pushes to `main` affecting `templates/**` trigger **Sync templates**. The pinned environment-matrix action selects dev and UAT in `eu-south-1`, plus production in both `eu-south-1` and `eu-central-1`. There is no `PUBLISH_ENVIRONMENT` variable.
 
-For every active version, the script:
+Maintainers can also use **Actions > Sync templates > Run workflow**, select `main`, and choose `dev`, `uat`, or `prod`. Manual runs use the same change selection: the selected commit is compared with its immediate parent. They do not publish every existing version. The workflow also uses this immediate-parent comparison for pushes, so a multi-commit push is not a full reconciliation.
 
-1. Verifies the configured AWS account, derived tenant, and existing registry ownership.
-2. Creates missing SES templates or updates changed content, verifies the result, and ensures the tenant association in **both `eu-south-1` and `eu-central-1`**.
-3. Only after both regions succeed, writes metadata through DynamoDB in `eu-south-1`, refreshing `lastModifiedDate`.
+For each added or changed template, every selected environment/region job independently:
 
-The registry is a global table replicated to `eu-central-1`. Each item contains only `TemplateName` (partition key), `tenantName`, and `lastModifiedDate` (UTC timestamp of the latest successful synchronization). Replication is not instantaneous; SES and DynamoDB are not a single transaction. OneMail's existence/tenant check must be enabled separately after initial alignment. There is no placeholder registry, runtime cache, or lifecycle-status field.
+1. Derives the SES template name and tenant from the asset path.
+2. Creates the SES template, or updates it if it already exists, then ensures the tenant association in that job's region.
+3. Writes the registry item through DynamoDB in `eu-south-1`, setting `status: ACTIVE` and refreshing `lastModifiedDate`. The conditional write allows only an absent item or the same owning tenant. This ownership condition is checked after the SES operations, not before them.
+
+The table defaults to `TemplateRegistry` and can be overridden with `AWS_TEMPLATE_DB_TABLE`. Active items contain `TemplateName` (partition key), `tenantName`, `lastModifiedDate`, and `status: ACTIVE`. Retired items also contain `retiredAt`. Publication replaces the item, so reactivating it removes `retiredAt`.
+
+The global registry is replicated to `eu-central-1`, but regional jobs do not wait for one another before writing metadata. A successful registry write does not prove that every region succeeded. SES and DynamoDB are not a single transaction. OneMail's runtime registry lookup must be configured separately.
 
 ### Update An Existing Template
 
-The path and `TemplateName` identify the version selected by clients; they do not make its content immutable. A PR may change `templates/ced/welcome-email/v1/template.json`, and after merge the publisher updates the SES content for `ced_welcome-email_v1` in both regions. Clients that keep using `v1` receive the updated content; they do not get switched to a new identifier automatically.
+The path and `TemplateName` identify the version selected by clients; they do not make its content immutable. A PR may change `templates/ced/welcome-email/v1/template.json`, and after merge the workflow updates `ced_welcome-email_v1` in the selected environments and regions. Clients that keep using `v1` receive the updated content; they do not get switched to a new identifier automatically.
 
-Create `v2` when clients should be able to opt into a distinct version while other clients continue using `v1`. The publisher creates a missing SES template, verifies matching content on reruns, and calls `UpdateEmailTemplate` when the checked-in content differs. It checks tenant ownership before updating and verifies the resulting SES content. `--no-prefix` remains required.
+Create `v2` when clients should be able to opt into a distinct version while other clients continue using `v1`. The script calls `UpdateEmailTemplate` whenever creation reports that the template already exists; it does not compare or read back the SES content. The SES name is derived from the asset path without additional prefixes.
 
 ### If Publication Fails
 
-Inspect the workflow logs for the template, operation, and region. Transient throttling, service failures, and timeouts receive bounded retries (three attempts by default); permissions, invalid configuration, and content/ownership conflicts require intervention.
+Inspect the workflow logs for the template, environment, and region. AWS CLI standard retries are configured with up to five attempts per call; permissions, invalid configuration, and ownership conflicts require intervention. Independent templates are still processed before the batch reports failure.
 
-A partial failure can leave the two SES regions or DynamoDB out of sync. Fix the cause and rerun **latest main**: matching content is verified, changed content is updated, and incomplete operations resume forward. No automatic rollback deletes resources. After each complete publication, `lastModifiedDate` records the latest successful synchronization. Contact the platform team for tenant, account, registry-schema, or IAM conflicts.
+A partial failure can leave SES regions or DynamoDB out of sync. Fix the cause and rerun the failed workflow or jobs to retry the same selected changes. A new manual run on a later commit selects that commit's diff, not previously failed templates. Already-existing associations and already-absent deletion targets are tolerated. There is no automatic rollback or post-write verification. Contact the platform team for tenant, account, registry-schema, or IAM conflicts.
 
 ## Remove A Version
 
-Open a PR that deletes the exact file, for example `templates/ced/welcome-email/v1/template.json`. Do not add a retirement marker or move the template elsewhere. The PR gate validates the deleted path against the base commit; it does not try to read or sanitize a file that no longer exists.
+Open a PR that deletes the exact file, for example `templates/ced/welcome-email/v1/template.json`. Do not add a retirement marker or move the template elsewhere. Deleted files are not read or sanitized in the PR.
 
-After merge to protected `main`, **Publish templates** publishes the remaining active versions and retires the deleted version in the configured `PUBLISH_ENVIRONMENT`. It verifies tenant ownership, removes the SES association and template in both regions, verifies absence, and then deletes the DynamoDB item. The workflow can also be run manually for another environment: select `operation: retire`, provide the deleted template path as `removed_template`, and explicitly accept `authorize_retirement`.
+After merge to `main`, **Sync templates** selects deleted paths from the commit diff and invokes `scripts/sync-ses-templates.sh -e <environment-short-name> -d <paths>`. Each matrix job removes the tenant association and SES template in its region, then writes a retained DynamoDB item with `status: RETIRED` and `retiredAt`. It does not republish unchanged versions. There is no separate retirement operation or authorization input in the workflow.
 
-Partial deletion can be resumed by rerunning the workflow. Shared resources and unknown or incomplete association listings fail closed. No AWS deletion occurs in the PR job.
+Partial deletion can be retried by rerunning the failed workflow or jobs. The script tolerates already-absent associations and templates, but does not list associations or verify absence after deletion. No AWS deletion occurs in the PR job.
 
-**Removal can break remaining callers and already queued emails.** Drain timing and new-submission sequencing remain unresolved; no automatic grace period or immediate blocking flag is provided. Coordinate the impact before merging the deletion PR. The publisher only processes the latest protected `main`; a rollback restores the historical file through a new PR.
+**Removal can break remaining callers and already queued emails.** No automatic grace period or queue-draining mechanism is provided. Coordinate the impact before merging the deletion PR. Restoring the historical file through a new PR causes it to be published again.
 
 ## Maintainer Setup
 
 Before enabling publication or requiring the PR check:
 
-- Publish the pinned `onemail` implementation commit and enable cross-repository reusable-workflow access. Keep `uses` and `tooling_ref` pinned to the same reviewed SHA; confirm checkout access if repositories are private.
+- Deploy `/v1/emails/sanitize-template` to UAT, including its API Gateway integration, before enabling the HTML check. No cross-repository sanitizer checkout or reusable workflow is required.
 - Merge trusted validator scripts before product asset PRs: PR validation runs the script from the PR base, never candidate scripts.
 - Protect `main`, require **Template validation**, and restrict deployment environments to `main` with suitable approvals.
-- Set repository variable `PUBLISH_ENVIRONMENT` to `dev`, `uat`, or `prod`.
-- Configure protected environments `dev`, `uat`, and `prod`, each with `ACCOUNT_ID`, `REGISTRY_TABLE`, and `AWS_ROLE_ARN` variables.
-- Provision environment-scoped OIDC/IAM access, the global registry, and SES tenants in **both regions**, including dev/UAT. Use short-lived credentials, not static AWS keys.
+- Configure GitHub environments `dev`, `uat`, `prod/eu-south-1`, and `prod/eu-central-1`, with `AWS_ROLE_ARN` and optionally `AWS_TEMPLATE_DB_TABLE`. The AWS account ID comes from the configured credentials action, not an `ACCOUNT_ID` variable.
+- Provision environment-scoped OIDC/IAM access, the global registry, and SES tenants in the matrix's regions. The publisher role needs SES template/tenant-association operations and conditional DynamoDB `PutItem` in `eu-south-1`. Use short-lived credentials, not static AWS keys.
 - Align existing manual templates and tenant associations with developers/cloud engineers before enabling strict OneMail lookup. Test the real publish/send/rerun/retire flow; local stubs do not prove live cloud readiness.
 
-Publication and removal use the already checked-out source, which must be clean and equal to latest protected `origin/main`. The script fetches and rechecks before mutations; private remotes need read access. Stale commits are rejected. Jobs targeting the same environment are serialized without cancelling in-progress operations.
+Changing an existing Terraform-managed registry table from `Template` to `TemplateRegistry` replaces the physical table. If the old table contains records, migrate and verify them before applying the rename; the pipeline does not copy registry data between tables.
 
-For an explicitly authorized manual upload from such a checkout, with the correct credentials and environment variables already configured:
+Publication jobs run only for `refs/heads/main`. The script does not fetch Git refs or reject a run whose commit has since become stale. Jobs targeting the same environment and region are serialized without cancelling in-progress operations; different matrix targets run independently.
 
-```bash
-bash scripts/upload-ses-templates.sh --input-dir . --env dev --no-prefix \
-  --account-id "$ACCOUNT_ID" --table-name "$REGISTRY_TABLE" \
-  --approved-ref "$(git rev-parse HEAD)"
-```
-
-Mutation requires AWS CLI v2 with SES tenant API support. Use `--help` for retry, profile, and removal options. The old URL-clone, prefix, single-region, recursive, and skip-invalid options are no longer supported: check out approved source and use the current contract.
+Use **Actions > Sync templates** for publication and retirement with the configured environment and role. The synchronization script uses paths relative to the current checkout and expects AWS credentials, `AWS_REGION`, and `AWS_ACCOUNT_ID` from the workflow.
 
 ## Repository Checks
 
 ```bash
-bash -n scripts/validate-templates.sh scripts/upload-ses-templates.sh
+bash -n scripts/validate-templates.sh
+bash -n scripts/sanitize-templates.sh
+bash -n scripts/sync-ses-templates.sh
 ```
 
 Run ShellCheck and actionlint when available. Workflows live in [.github/workflows](.github/workflows); executable tooling lives in [scripts](scripts).
