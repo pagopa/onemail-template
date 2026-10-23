@@ -24,8 +24,8 @@ jobs:
             contents: read
         outputs:
             matrix: ${{ steps.matrix.outputs.matrix }}
-            changed_files: ${{ steps.changes.outputs.all_changed_and_modified_files }}
-            deleted_files: ${{ steps.changes.outputs.deleted_files }}
+            changed_files: ${{ steps.changes.outputs.all_changed_files }} # Added, copied, modified, and renamed template files
+            deleted_files: ${{ steps.changes.outputs.deleted_files }} # All deleted template files
         steps:
             - name: Checkout
               uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
@@ -35,7 +35,7 @@ jobs:
 
             - name: Setup Environment Matrix
               id: matrix
-              uses: pagopa/onemail/.github/actions/env-matrix@fd8261bc069dd711e8c517c0e022efc38c8b7da9 # onemail fd8261b https://github.com/pagopa/onemail/commit/fd8261bc069dd711e8c517c0e022efc38c8b7da9
+              uses: ./.github/action/env-matrix
               with:
                   event_name: ${{ github.event_name }}
                   environment_input: ${{ inputs.environment }}
@@ -45,15 +45,17 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
+                  # Compare against the commit immediately before this one.
                   base_sha=$(git rev-parse "$GITHUB_SHA^")
+                  # Expose the base SHA to the next step.
                   printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
 
             - name: Detect changed templates
               id: changes
               uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
               with:
-                  base_sha: ${{ steps.base.outputs.sha }}
-                  sha: ${{ github.sha }}
+                  base_sha: ${{ steps.base.outputs.sha }} # The commit immediately before the current one
+                  sha: ${{ github.sha }} # The current commit SHA
                   files: templates/**/template.json
                   output_renamed_files_as_deleted_and_added: true
                   json: true
@@ -63,7 +65,7 @@ jobs:
                   skip_initial_fetch: true
                   fail_on_initial_diff_error: true
 
-    publish:
+    synchronization:
         name: Sync templates - ${{ matrix.environment }}-${{ matrix.region }}
         needs: changes
         if: github.ref == 'refs/heads/main' && (needs.changes.outputs.changed_files != '[]' || needs.changes.outputs.deleted_files != '[]')

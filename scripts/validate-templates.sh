@@ -14,7 +14,7 @@ validate_file() {
 
     # The existing folder convention determines the exact, case-sensitive SES name.
     if [[ ! $path =~ $pattern ]]; then
-        printf 'Expected templates/<client>/<template>/vN/template.json (lowercase kebab case, positive version).\n'
+        printf '❌ Expected templates/<client>/<template>/vN/template.json (lowercase kebab case, positive version).\n'
         return 1
     fi
 
@@ -26,11 +26,11 @@ validate_file() {
     for component in "${components[@]}"; do
         current="${current:+$current/}$component"
         if [[ -L $current ]]; then
-            printf 'Symlink not allowed: %s\n' "$current"
+            printf '❌ Symlink not allowed: %s\n' "$current"
             return 1
         fi
     done
-    [[ -f $path ]] || { printf 'Expected an existing regular file.\n'; return 1; }
+    [[ -f $path ]] || { printf '❌ Expected an existing regular file.\n'; return 1; }
 
     # Accept only SES keys: required non-empty Subject/Html and optional string Text.
     if ! jq -e -s --arg name "$expected" '
@@ -60,7 +60,7 @@ for path in "$@"; do
 done
 
 if [[ ${#errors[@]} -gt 0 ]]; then
-    printf 'ERROR: Validation failed for %s file(s):\n' "${#errors[@]}" >&2
+    printf '❌ ERROR: Validation failed for %s file(s):\n' "${#errors[@]}" >&2
     printf '  - %s\n' "${errors[@]}" >&2
     exit 1
 fi

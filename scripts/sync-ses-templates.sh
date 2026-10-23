@@ -31,14 +31,17 @@ REGISTRY_REGION="eu-south-1"
 
 # Only the expected already-existing/already-absent error is safe to ignore on reruns.
 aws_call() {
+    # Ignore only this optional AWS error code; an empty value means no error is ignored.
     local expected_error=$1 output
     shift
     if output=$(aws "$@" 2>&1); then
         return 0
     fi
+    # Treat the expected error as success to make create/delete operations safe to rerun.
     if [[ -n $expected_error && $output == *"($expected_error)"* ]]; then
         return 0
     fi
+    # Report all other AWS errors and propagate failure to the caller.
     printf '❌ AWS %s failed: %s\n' "$*" "$output" >&2
     return 1
 }
@@ -68,6 +71,7 @@ sync_template() {
 
     # Explicit guards stop this template at the first error, even when called inside an if.
     # SES and DynamoDB cannot share a transaction: reruns complete any partial work forward.
+    # TODO: perchè come ignore gli passo notfoundException?
     if [[ $DELETE == true ]]; then
         aws_call NotFoundException sesv2 delete-tenant-resource-association \
             --tenant-name "$tenant" --resource-arn "$resource" || return 1
@@ -96,8 +100,11 @@ sync_template() {
 FAILED=()
 for path in "$@"; do
     # PR validation enforces the naming contract; here we only convert the trusted path.
+    # Example: templates/checkout/welcome/v1/template.json -> checkout/welcome/v1/template.json.
     name=${path#templates/}
+    # Example: checkout/welcome/v1/template.json -> checkout/welcome/v1.
     name=${name%/template.json}
+    # Example: checkout/welcome/v1 -> checkout_welcome_v1 (the SES template name).
     name=${name//\//_}
     if ! sync_template "$path" "$name"; then
         FAILED+=("$name")

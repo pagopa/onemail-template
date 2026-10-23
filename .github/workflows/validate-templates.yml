@@ -17,12 +17,12 @@ jobs:
       has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
       files: ${{ steps.validate.outputs.files }}
     steps:
-      # Read candidate templates from the PR commit; do not execute its validation scripts.
-      - name: Checkout candidate data
+      # Read feature_checkout templates from the PR commit; do not execute its validation scripts.
+      - name: Checkout feature_checkout data
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: candidate
+          path: feature_checkout
           fetch-depth: 0
           persist-credentials: false
 
@@ -30,7 +30,7 @@ jobs:
         id: changes
         uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
         with:
-          path: candidate
+          path: feature_checkout
           base_sha: ${{ github.event.pull_request.base.sha }}
           sha: ${{ github.event.pull_request.head.sha }}
           files: templates/**
@@ -44,29 +44,29 @@ jobs:
           fail_on_initial_diff_error: true
 
       # Run the trusted validator from the PR base, never scripts proposed by the PR.
-      - name: Checkout trusted base validator
+      - name: Checkout main validator
         if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          path: template_checkout
+          path: main_checkout
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Validate changed assets with trusted base template_checkout script
+      - name: Validate changed templates with main_checkout script
         id: validate
         if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         shell: bash
-        working-directory: candidate
+        working-directory: feature_checkout
         env:
-          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }}
-          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }}
-        # Merge and deduplicate current paths, preserve filenames, then run the trusted validator.
+          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }} # Changed paths matching templates/**.
+          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }} # Paths whose Git object type changed, such as a regular file becoming a symlink.
+        # Merge and deduplicate changed files and type changed file, preserve filenames, then run the trusted validator.
         run: |
           set -euo pipefail
           selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
-          bash ../template_checkout/scripts/validate-templates.sh "${files[@]}"
+          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}"
           printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
   sanitize:
@@ -90,22 +90,22 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          path: templates_checkout
+          path: feature_checkout
           sparse-checkout: templates
           persist-credentials: false
 
       - name: Sanitize changed templates
         shell: bash
-        working-directory: templates_checkout
+        working-directory: feature_checkout
         env:
           FILES: ${{ needs.filenames.outputs.files }}
-          SANITIZER_URL: https://uat.onemail.pagopa.it/v1/emails/sanitize-template
+          SANITIZER_URL: ${{ secrets.SANITIZER_URL }}
         run: |
           set -euo pipefail
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
           bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}"
 
-  required:
+  validation-result:
     name: Template validation
     needs: [filenames, sanitize]
     if: always()
