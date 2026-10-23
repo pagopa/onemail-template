@@ -1,0 +1,121 @@
+name: Validate templates
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  filenames:
+    name: Path gate and template contract
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
+      files: ${{ steps.validate.outputs.files }}
+    steps:
+      # Read feature_checkout templates from the PR commit; do not execute its validation scripts.
+      - name: Checkout feature_checkout data
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: feature_checkout
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect changed template assets
+        id: changes
+        uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
+        with:
+          path: feature_checkout
+          base_sha: ${{ github.event.pull_request.base.sha }}
+          sha: ${{ github.event.pull_request.head.sha }}
+          files: templates/**
+          output_renamed_files_as_deleted_and_added: true
+          exclude_symlinks: false
+          json: true
+          escape_json: false
+          safe_output: false
+          quotepath: false
+          skip_initial_fetch: true
+          fail_on_initial_diff_error: true
+
+      # Run the trusted validator from the PR base, never scripts proposed by the PR.
+      - name: Checkout main validator
+        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: main_checkout
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Validate changed templates with main_checkout script
+        id: validate
+        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
+        shell: bash
+        working-directory: feature_checkout
+        env:
+          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }} # Changed paths matching templates/**.
+          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }} # Paths whose Git object type changed, such as a regular file becoming a symlink.
+        # Merge and deduplicate changed files and type changed file, preserve filenames, then run the trusted validator.
+        run: |
+          set -euo pipefail
+          selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
+          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}"
+          printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
+
+  sanitize:
+    name: Template HTML check via UAT API
+    needs: filenames
+    if: needs.filenames.outputs.has_templates == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main branch sanitizer script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: main_checkout
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Checkout Pull Request templates
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: feature_checkout
+          sparse-checkout: templates
+          persist-credentials: false
+
+      - name: Sanitize changed templates
+        shell: bash
+        working-directory: feature_checkout
+        env:
+          FILES: ${{ needs.filenames.outputs.files }}
+          SANITIZER_URL: ${{ secrets.SANITIZER_URL }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
+          bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}"
+
+  validation-result:
+    name: Template validation
+    needs: [filenames, sanitize]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Reject failed or missing required checks
+        if: >-
+          needs.filenames.result != 'success' ||
+          (needs.filenames.outputs.has_templates == 'true' && needs.sanitize.result != 'success') ||
+          (needs.filenames.outputs.has_templates != 'true' && needs.sanitize.result != 'skipped')
+        run: exit 1
