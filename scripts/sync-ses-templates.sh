@@ -71,7 +71,7 @@ sync_template() {
 
     # Explicit guards stop this template at the first error, even when called inside an if.
     # SES and DynamoDB cannot share a transaction: reruns complete any partial work forward.
-    # TODO: perchè come ignore gli passo notfoundException?
+    # Missing associations and templates are already in the desired state during deletion.
     if [[ $DELETE == true ]]; then
         aws_call NotFoundException sesv2 delete-tenant-resource-association \
             --tenant-name "$tenant" --resource-arn "$resource" || return 1
