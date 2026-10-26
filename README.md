@@ -9,6 +9,7 @@ This repository stores versioned OneMail email templates, validates pull request
 - [What is this repo?](#what-is-this-repo)
 - [What is a template?](#what-is-a-template)
 - [How to add a template](#how-to-add-a-template)
+  - [Example](#example)
   - [Naming rules](#naming-rules)
 - [Check your changes locally](#check-your-changes-locally)
 - [Update an existing template](#update-an-existing-template)
@@ -36,7 +37,23 @@ This repository owns versioned template files and the synchronization scripts. T
 5. Wait for approval from the BB team (the repository owners), then merge the PR.
 6. After merge, check the **Sync templates** workflow for the result (a merged PR alone does not prove the upload succeeded).
 
-For example, `templates/ced/welcome-email/v1/template.json` (the following content is illustrative, not an approved product email):
+To generate the initial JSON structure, you can run from the repository root:
+
+```bash
+# Create templates/ced/welcome-email/v1/template.json (v1 is the default).
+bash scripts/create-template.sh ced welcome-email
+
+# Create a separate version.
+bash scripts/create-template.sh ced welcome-email v2
+```
+
+Pass the client folder name, the logical template name and the optional version (default is v1).
+
+Only `TemplateName` is populated; `Subject`, `Html`, and `Text` are empty strings to fill in.
+
+### Example 
+
+For example, `templates/ced/welcome-email/v1/template.json`:
 
 ```json
 {
