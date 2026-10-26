@@ -29,12 +29,22 @@ export AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
 TABLE_NAME=${AWS_TEMPLATE_DB_TABLE:-TemplateRegistry}
 REGISTRY_REGION="eu-south-1"
 
+aws_request() {
+    local status=0
+    aws "$@" || status=$?
+    # Wait 1s after every SES v2 request (to avoid hitting rate limits -  1 request per second)
+    if [[ $1 == sesv2 ]]; then
+        sleep 1 || return 1
+    fi
+    return "$status"
+}
+
 # Only the expected already-existing/already-absent error is safe to ignore on reruns.
 aws_call() {
     # Ignore only this optional AWS error code; an empty value means no error is ignored.
     local expected_error=$1 output
     shift
-    if output=$(aws "$@" 2>&1); then
+    if output=$(aws_request "$@" 2>&1); then
         return 0
     fi
     # Treat the expected error as success to make create/delete operations safe to rerun.
@@ -48,7 +58,7 @@ aws_call() {
 
 publish_template() {
     local path=$1 name=$2 output
-    if output=$(aws sesv2 create-email-template --cli-input-json "file://$path" 2>&1); then
+    if output=$(aws_request sesv2 create-email-template --cli-input-json "file://$path" 2>&1); then
         return 0
     fi
     if [[ $output != *'(AlreadyExistsException)'* ]]; then
