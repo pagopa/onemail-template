@@ -17,7 +17,7 @@ permissions: {}
 
 jobs:
     changes:
-        name: Prepare changed templates and environment matrix
+        name: Prepare changed templates
         runs-on: ubuntu-22.04
         timeout-minutes: 5
         permissions:
@@ -40,7 +40,7 @@ jobs:
                   event_name: ${{ github.event_name }}
                   environment_input: ${{ inputs.environment }}
 
-            - name: Resolve change base
+            - name: Resolve first parent commit for change detection
               id: base
               shell: bash
               run: |

@@ -7,8 +7,8 @@ on:
 permissions: {}
 
 jobs:
-  filenames:
-    name: Path gate and template contract
+  get_and_validate:
+    name: Template structure validation
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     permissions:
@@ -17,8 +17,8 @@ jobs:
       has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
       files: ${{ steps.validate.outputs.files }}
     steps:
-      # Read feature_checkout templates from the PR commit; do not execute its validation scripts.
-      - name: Checkout feature_checkout data
+      # Read feature branch templates from the PR commit; do not execute its validation scripts.
+      - name: Checkout feature branch data
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -26,7 +26,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Detect changed template assets
+      - name: Detect changed template files
         id: changes
         uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
         with:
@@ -44,7 +44,7 @@ jobs:
           fail_on_initial_diff_error: true
 
       # Run the trusted validator from the PR base, never scripts proposed by the PR.
-      - name: Checkout main validator
+      - name: Checkout main branch validator
         if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
@@ -53,7 +53,7 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Validate changed templates with main_checkout script
+      - name: Validate changed templates with main branch script
         id: validate
         if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
         shell: bash
@@ -66,19 +66,19 @@ jobs:
           set -euo pipefail
           selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
-          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}"
+          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}" # Use main branch validator
           printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
   sanitize:
-    name: Template HTML check via UAT API
-    needs: filenames
-    if: needs.filenames.outputs.has_templates == 'true'
+    name: Template HTML content check
+    needs: get_and_validate
+    if: needs.get_and_validate.outputs.has_templates == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - name: Checkout main branch sanitizer script
+      - name: Checkout main branch sanitization script
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -86,7 +86,7 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Checkout Pull Request templates
+      - name: Checkout Pull Request branch templates
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -98,16 +98,16 @@ jobs:
         shell: bash
         working-directory: feature_checkout
         env:
-          FILES: ${{ needs.filenames.outputs.files }}
+          FILES: ${{ needs.get_and_validate.outputs.files }}
           SANITIZER_URL: ${{ secrets.SANITIZER_URL }}
         run: |
           set -euo pipefail
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
-          bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}"
+          bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}" # Use main branch sanitization script
 
   validation-result:
     name: Template validation
-    needs: [filenames, sanitize]
+    needs: [get_and_validate, sanitize]
     if: always()
     runs-on: ubuntu-22.04
     timeout-minutes: 1
@@ -115,7 +115,7 @@ jobs:
     steps:
       - name: Reject failed or missing required checks
         if: >-
-          needs.filenames.result != 'success' ||
-          (needs.filenames.outputs.has_templates == 'true' && needs.sanitize.result != 'success') ||
-          (needs.filenames.outputs.has_templates != 'true' && needs.sanitize.result != 'skipped')
+          needs.get_and_validate.result != 'success' ||
+          (needs.get_and_validate.outputs.has_templates == 'true' && needs.sanitize.result != 'success') ||
+          (needs.get_and_validate.outputs.has_templates != 'true' && needs.sanitize.result != 'skipped')
         run: exit 1
