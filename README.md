@@ -51,7 +51,7 @@ Pass the client folder name, the logical template name and the optional version 
 
 Only `TemplateName` is populated; `Subject`, `Html`, and `Text` are empty strings to fill in.
 
-### Example 
+### Example
 
 For example, `templates/ced/welcome-email/v1/template.json`:
 
@@ -73,21 +73,24 @@ The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `H
 
 ### Naming Rules
 
-| Part                         | Rule                                                                        | Example                |
-| ---------------------------- | --------------------------------------------------------------------------- | ---------------------- |
-| Product | Lowercase letters/numbers, separated by single hyphens; start with a letter | `ced`, `building-blocks` |
- Logical name | Lowercase letters/numbers, separated by single hyphens; start with a letter | `login`, `welcome-email` |
-| Version            | `v` followed by a positive integer, without leading zeros                   | `v1`, `v12`            |
-| Filename                     | Always exactly `template.json`                                              | Not `welcome.json`     |
-| TemplateName                 | Matches the path                         | `ced_welcome-email_v1` |
+| Part         | Rule                                                                        | Example                  |
+| ------------ | --------------------------------------------------------------------------- | ------------------------ |
+| Product      | Lowercase letters/numbers, separated by single hyphens; start with a letter | `ced`, `building-blocks` |
+| Logical name | Lowercase letters/numbers, separated by single hyphens; start with a letter | `login`, `welcome-email` |
+| Version      | `v` followed by a positive integer, without leading zeros                   | `v1`, `v12`              |
+| Filename     | Always exactly `template.json`                                              | Not `welcome.json`       |
+| TemplateName | Matches the path                                                            | `ced_welcome-email_v1`   |
 
 The PR checks filenames and paths **before reading template content** and fails if they are invalid.
 
 The product folder also determines the SES tenant. For `templates/ced/...`, the tenant is `oml-d-tenant-ced` in dev, `oml-u-tenant-ced` in UAT, and `oml-p-tenant-ced` in production. Those tenants must already exist; adding a folder does not provision AWS resources. CODEOWNERS remains the source of repository ownership and review requirements.
 
+Before publishing a template, the sync script checks that its SES tenant exists in the target environment and region. If SES returns `NotFoundException`, the script skips the template without changing SES or DynamoDB, continues processing the others, and reports accumulated warnings at the end of the batch, including GitHub Actions warning annotations. Missing tenants alone do not fail the job; other AWS errors still do. The pipeline role requires `ses:GetTenant` for this check. After provisioning a missing tenant, rerun the original workflow or the affected publication job to publish the skipped templates; provisioning alone does not trigger publication. This check applies only to publication, not deletion.
+
 ## Check Your Changes Locally
 
 Requirements:
+
 - bash
 - jq
 - curl
