@@ -9,14 +9,25 @@ The **Sync templates** workflow applies template changes (new templates, modifie
 
 The workflow detects `templates/**/template.json` changes, and added, copied, modified, and renamed template files are synchronized; deleted template files are retired.
 
+## Tenant prerequisites
+
+The product folder also determines the SES tenant. For `templates/ced/...`, the tenant is `oml-<env-short>-tenant-ced`.
+
 ## What the workflow does
 
-For each changed template:
+For each added or updated template:
 
 1. Get the SES template name (derived from the path).
 2. Derives the tenant name from the client directory. For example, the `ced` client in `uat` uses `oml-u-tenant-ced`.
 3. Creates the SES template, or updates it if SES reports that it already exists, then creates the tenant-resource association in the selected region.
 4. Writes an `ACTIVE` item to DynamoDB. The item contains `TemplateName`, `tenantName`, `lastModifiedDate`, and `status`.
+
+> Publication runs only if the tenant exists in the target environment and region. Otherwise, the template is skipped with a warning, without failing the job.
+
+For each deleted template:
+
+1. Removes the tenant-resource association and deletes the SES template in the selected region.
+2. Keeps a record in DynamoDB with status `RETIRED` and a `retiredAt` timestamp.
 
 ## Verify a run
 

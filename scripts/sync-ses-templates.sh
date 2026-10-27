@@ -88,7 +88,7 @@ sync_template() {
         aws_call NotFoundException sesv2 delete-email-template --template-name "$name" || return 1
         status=RETIRED
     else
-        if ! output=$(aws sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+        if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
             if [[ $output == *'(NotFoundException)'* ]]; then
                 WARNINGS+=("$name: tenant $tenant does not exist in $AWS_REGION; publication skipped.")
                 return 0
@@ -130,7 +130,7 @@ for path in "$@"; do
     fi
 done
 if [[ ${#WARNINGS[@]} -gt 0 ]]; then
-    printf 'WARNING: Skipped templates (%s):\n' "${#WARNINGS[@]}" >&2
+    printf '⚠️ WARNING: Skipped templates (%s):\n' "${#WARNINGS[@]}" >&2
     for warning in "${WARNINGS[@]}"; do
         if [[ ${GITHUB_ACTIONS:-} == true ]]; then
             printf '::warning::%s\n' "$warning"
