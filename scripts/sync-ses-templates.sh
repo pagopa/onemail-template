@@ -69,7 +69,7 @@ publish_template() {
 }
 
 sync_template() {
-    local path=$1 name=$2 client_path client tenant resource status=ACTIVE date item values
+    local path=$1 name=$2 client_path client tenant resource status=ACTIVE date item values output
     # Example path: templates/checkout/welcome/v1/template.json.
     client_path=${path%/*}         # Remove template.json: templates/checkout/welcome/v1.
     client_path=${client_path%/*}  # Remove v1: templates/checkout/welcome.
@@ -88,6 +88,14 @@ sync_template() {
         aws_call NotFoundException sesv2 delete-email-template --template-name "$name" || return 1
         status=RETIRED
     else
+        if ! output=$(aws sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+            if [[ $output == *'(NotFoundException)'* ]]; then
+                WARNINGS+=("$name: tenant $tenant does not exist in $AWS_REGION; publication skipped.")
+                return 0
+            fi
+            printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
+            return 1
+        fi
         publish_template "$path" "$name" || return 1
         aws_call AlreadyExistsException sesv2 create-tenant-resource-association \
             --tenant-name "$tenant" --resource-arn "$resource" || return 1
@@ -108,6 +116,7 @@ sync_template() {
 
 # Finish independent templates before failing the batch, and list every failed template.
 FAILED=()
+WARNINGS=()
 for path in "$@"; do
     # PR validation enforces the naming contract; here we only convert the trusted path.
     # Example: templates/checkout/welcome/v1/template.json -> checkout/welcome/v1/template.json.
@@ -120,6 +129,16 @@ for path in "$@"; do
         FAILED+=("$name")
     fi
 done
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+    printf 'WARNING: Skipped templates (%s):\n' "${#WARNINGS[@]}" >&2
+    for warning in "${WARNINGS[@]}"; do
+        if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+            printf '::warning::%s\n' "$warning"
+        else
+            printf '  - %s\n' "$warning" >&2
+        fi
+    done
+fi
 if [[ ${#FAILED[@]} -gt 0 ]]; then
     printf '❌ Failed templates:\n' >&2
     printf '  - %s\n' "${FAILED[@]}" >&2
