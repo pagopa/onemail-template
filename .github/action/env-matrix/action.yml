@@ -1,0 +1,38 @@
+name: Environment Matrix Setup
+description: 'Set dynamic environment matrix (env-region) based on event type (push or workflow_dispatch)'
+
+inputs:
+  event_name:
+    description: 'GitHub event name (github.event_name)'
+    required: true
+  environment_input:
+    description: 'Environment input from workflow_dispatch (github.event.inputs.environment)'
+    required: false
+    default: ''
+
+outputs:
+  matrix:
+    description: 'Stringified JSON matrix for strategy.matrix'
+    value: ${{ steps.setmatrix.outputs.matrix }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set Dynamic Env Matrix
+      id: setmatrix
+      shell: bash
+      run: |
+        echo "github event: ${{ inputs.event_name }}"
+        echo "environment input: ${{ inputs.environment_input }}"
+
+        if [ "${{ inputs.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ inputs.environment_input }}" == "prod" ]; then
+            matrixStringifiedObject="{\"include\":[{\"environment\":\"prod\", \"region\":\"eu-south-1\"}, {\"environment\":\"prod\", \"region\":\"eu-central-1\"}]}"
+          else
+            matrixStringifiedObject="{\"include\":[{\"environment\":\"${{ inputs.environment_input }}\", \"region\":\"eu-south-1\"}]}"
+          fi
+        else
+          matrixStringifiedObject="{\"include\":[{\"environment\":\"dev\", \"region\":\"eu-south-1\"}, {\"environment\":\"uat\", \"region\":\"eu-south-1\"}, {\"environment\":\"prod\", \"region\":\"eu-south-1\"}, {\"environment\":\"prod\", \"region\":\"eu-central-1\"}]}"
+        fi
+
+        echo "matrix=$matrixStringifiedObject" >> $GITHUB_OUTPUT
