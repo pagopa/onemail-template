@@ -88,13 +88,22 @@ sync_template() {
         aws_call NotFoundException sesv2 delete-email-template --template-name "$name" || return 1
         status=RETIRED
     else
-        if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
-            if [[ $output == *'(NotFoundException)'* ]]; then
-                WARNINGS+=("$name: tenant $tenant does not exist in $AWS_REGION; publication skipped.")
-                return 0
+        # An unset entry triggers the AWS check; cached true/false values reuse its result.
+        if [[ -z ${TENANT_EXISTS[$tenant]:-} ]]; then
+            if output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+                TENANT_EXISTS[$tenant]=true
+            elif [[ $output == *'(NotFoundException)'* ]]; then
+                TENANT_EXISTS[$tenant]=false
+            else
+                # Cache only confirmed presence or absence, never other AWS errors.
+                printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
+                return 1
             fi
-            printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
-            return 1
+        fi
+        # Skip every template of an absent tenant, keeping one warning per template.
+        if [[ ${TENANT_EXISTS[$tenant]} == false ]]; then
+            WARNINGS+=("$name: tenant $tenant does not exist in $AWS_REGION; publication skipped.")
+            return 0
         fi
         publish_template "$path" "$name" || return 1
         aws_call AlreadyExistsException sesv2 create-tenant-resource-association \
@@ -117,6 +126,8 @@ sync_template() {
 # Finish independent templates before failing the batch, and list every failed template.
 FAILED=()
 WARNINGS=()
+# Tenant cache shared across templates; environment and region are fixed for this run.
+declare -A TENANT_EXISTS=()
 for path in "$@"; do
     # PR validation enforces the naming contract; here we only convert the trusted path.
     # Example: templates/checkout/welcome/v1/template.json -> checkout/welcome/v1/template.json.
