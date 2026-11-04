@@ -12,20 +12,25 @@ on:
                 type: choice
                 options: [dev, uat, prod]
                 required: true
+            client:
+                description: Client folder name under templates (for example ced)
+                type: string
+                required: true
 
 permissions: {}
 
 jobs:
     changes:
-        name: Prepare changed templates
+        name: Prepare templates to synchronize
+        if: github.ref == 'refs/heads/main'
         runs-on: ubuntu-22.04
         timeout-minutes: 5
         permissions:
             contents: read
         outputs:
             matrix: ${{ steps.matrix.outputs.matrix }}
-            changed_files: ${{ steps.changes.outputs.all_changed_files }} # Added, copied, modified, and renamed template files
-            deleted_files: ${{ steps.changes.outputs.deleted_files }} # All deleted template files
+            changed_files: ${{ steps.manual.outputs.files || steps.changes.outputs.all_changed_files }} # Added and modified template files
+            deleted_files: ${{ github.event_name == 'workflow_dispatch' && '[]' || steps.changes.outputs.deleted_files }} # Deleted template files
         steps:
             - name: Checkout
               uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
@@ -40,7 +45,9 @@ jobs:
                   event_name: ${{ github.event_name }}
                   environment_input: ${{ inputs.environment }}
 
-            - name: Resolve first parent commit for change detection
+            - name: Resolve change base (first parent commit)
+              # only for automatic run (push events)
+              if: github.event_name == 'push'
               id: base
               shell: bash
               run: |
@@ -51,6 +58,8 @@ jobs:
                   printf 'sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
 
             - name: Detect changed templates
+              # only for automatic run (push events)
+              if: github.event_name == 'push'
               id: changes
               uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5 https://github.com/tj-actions/changed-files/releases/tag/v47.0.5
               with:
@@ -64,6 +73,30 @@ jobs:
                   quotepath: false
                   skip_initial_fetch: true
                   fail_on_initial_diff_error: true
+
+            # Manual runs create or update all templates for the selected client; they never delete template resources.
+            - name: Select client templates
+              id: manual
+              # only for manual run (workflow dispatch)
+              if: github.event_name == 'workflow_dispatch'
+              shell: bash
+              env:
+                  CLIENT: ${{ inputs.client }}
+              run: |
+                  set -euo pipefail
+                  if [[ -L templates || -L templates/$CLIENT || ! -d templates/$CLIENT ]]; then
+                    printf '::error::Client folder does not exist.\n' >&2
+                    exit 1
+                  fi
+                  # unmatched expression produces an empty array
+                  shopt -s nullglob
+                  files=("templates/$CLIENT/"*/*/template.json)
+                  if [[ ${#files[@]} -eq 0 ]]; then
+                    printf '::error::No template files found for this client.\n' >&2
+                    exit 1
+                  fi
+                  selected=$(printf '%s\0' "${files[@]}" | jq -Rsc 'split("\u0000")[:-1]')
+                  printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
     synchronization:
         name: Sync templates - ${{ matrix.environment }}-${{ matrix.region }}

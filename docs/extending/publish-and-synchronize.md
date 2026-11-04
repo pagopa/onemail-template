@@ -5,9 +5,11 @@ The **Sync templates** workflow applies template changes (new templates, modifie
 ## When publishing runs
 
 - A push to `main` branch that changes something under `templates/**` triggers the workflow.
-- A maintainer can also start it manually from **Actions > Sync templates > Run workflow**, choosing the env.
+- A maintainer can also start it manually from **Actions > Sync templates > Run workflow**, selecting **main** branch, the environment and a client folder name (for example `ced`, not `templates/ced/`).
 
-The workflow detects `templates/**/template.json` changes, and added, copied, modified, and renamed template files are synchronized; deleted template files are retired.
+On automatic run, the workflow detects `templates/**/template.json` changes against the previous commit: added, copied, modified, and renamed template files are synchronized; deleted template files are retired.
+
+On manual run, it publishes files matching `templates/<client>/*/*/template.json`, including also versions already published. It does not depend on the previous commit. In this case, existing templates are updated even if their content is unchanged. Manual publication never deletes resources, it only publish or update client templates inside the target folder.
 
 ## Tenant prerequisites
 
@@ -38,3 +40,7 @@ After a merge, inspect the run for the merge commit. Check each expected job and
 The script uses a retry mode, with up to five attempts per call. It continues processing other paths after a template fails, then exits with a failure summary. Inspect the logs for the affected template.
 
 After correcting the issue, rerun the failed workflow to retry.
+
+## Local checks
+
+Run `ruby tests/manual-publication.test.rb` to test manual file selection and workflow wiring without AWS. The tests require Ruby with Minitest, Git, jq and Bash 4 or newer. If your default Bash is older, set `BASH_BIN` to a compatible executable.
