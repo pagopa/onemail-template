@@ -13,8 +13,8 @@ Always reply in the language used by the user (Italian or English).
 - NEVER run `git commit`, `git push`, `git merge`, `git rebase`, `git reset`, `git stash`, `gh pr create`, or any command that rewrites history or publishes changes. The user commits and pushes.
 - Only run `git checkout -b <branch>` or `git add <paths>` after the user explicitly confirms. Read-only git commands (`status`, `diff`, `log`, `branch`) are always fine.
 - NEVER run `scripts/sync-ses-templates.sh` or anything that talks to AWS.
-- ONLY modify files inside this repository: `templates/**`, `docs/templates-tree.md`, and the generated section of `README.md` (through the script). Treat any external source repo as read-only.
-- NEVER edit `docs/templates-tree.md` or the README block between `<!-- TEMPLATE-TREE:START -->` and `<!-- TEMPLATE-TREE:END -->` by hand: always run `bash scripts/generate-template-tree.sh`.
+- ONLY modify files inside this repository: `templates/**` and `docs/templates-tree.md`. Treat any external source repo as read-only. Do not modify `README.md` when refreshing the template list.
+- NEVER edit `docs/templates-tree.md` by hand: always run `bash scripts/generate-template-tree.sh`.
 - NEVER overwrite the content of an existing version silently: if the target version already exists, ask whether to update it in place (only for non-production templates, see README "Update an existing template") or to create the next version `vN+1`.
 - Do not invent email content: Subject, Html and Text must come from the source the user indicated or from the user.
 
@@ -35,20 +35,20 @@ Always reply in the language used by the user (Italian or English).
    - Fill content with `jq` so HTML is JSON-escaped correctly, e.g. `jq --rawfile html <source.html> --arg subject '<subject>' --rawfile text <source.txt> '.TemplateContent.Subject=$subject | .TemplateContent.Html=$html | .TemplateContent.Text=$text' <file> > <file>.tmp && mv <file>.tmp <file>`. Drop `Text` only if no plain-text alternative exists and the user accepts it.
    - Delete: remove exactly the `template.json` files requested and the empty parent folders; remind the user to coordinate with consumers.
 5. **Validate.** Run `bash scripts/validate-templates.sh <every added or modified template.json>` and fix any error. Then ask whether to run the HTML check and, if yes, run `SANITIZER_URL=https://uat.onemail.pagopa.it/v1/emails/sanitize-template bash scripts/sanitize-templates.sh <files>` (requires network). If the sanitizer reports `isSanitized: true`, explain that the HTML must be fixed at the source.
-6. **Refresh the managed templates tree.** Run `bash scripts/generate-template-tree.sh`, then `bash scripts/generate-template-tree.sh --check` to confirm `docs/templates-tree.md` and `README.md` are aligned.
+6. **Refresh the managed templates tree.** Run `bash scripts/generate-template-tree.sh`, then `bash scripts/generate-template-tree.sh --check` to confirm `docs/templates-tree.md` is up to date.
 7. **Review the diff.** Run `git status --short` and `git --no-pager diff --stat` and make sure only the expected files changed.
 
 ## Output Format
 
 End with a summary in the user's language containing:
 
-1. **Changed files**: list of added/modified/deleted paths (templates, `docs/templates-tree.md`, `README.md`).
+1. **Changed files**: list of added/modified/deleted paths (templates, `docs/templates-tree.md`).
 2. **Checks**: result of `validate-templates.sh`, `sanitize-templates.sh` (or "not run"), and `generate-template-tree.sh --check`.
 3. **Suggested commands** for the user (not executed), e.g.:
    ```bash
    git config core.hooksPath .githooks                  # once per clone, if `git config core.hooksPath` is not already .githooks
    git checkout -b feat/<client>-<short-description>   # if not already on a feature branch
-   git add templates/<client> docs/templates-tree.md README.md
+   git add templates/<client> docs/templates-tree.md
    git commit -m "feat(<client>): <add|update|delete> <templates>"
    git push -u origin <branch>
    ```
