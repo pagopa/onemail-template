@@ -34,7 +34,9 @@ To have this checked automatically, enable the repository pre-commit hook once p
 git config core.hooksPath .githooks
 ```
 
-When a commit adds, deletes, or renames a `template.json`, the hook regenerates the list in `docs/templates-tree.md` only; if it changed, the commit is aborted so you can review and stage that file. The README is not regenerated.
+On every commit, the hook checks `docs/templates-tree.md` on disk against all `template.json` files in the working tree, regardless of which files are staged. If the file is outdated or missing, the hook regenerates it and aborts the commit so you can review and stage it. If the list is already correct on disk, the hook allows the commit without checking staging or asking for `git add`. Unstaged and untracked templates are included too. The README is not regenerated.
+
+The hook calls `bash scripts/generate-template-tree.sh --check-and-update` once: this mode exits silently with code `0` when the list is correct, or reports the mismatch and automatic correction and exits with code `1` when outdated or missing. Use `--check` for a read-only check; without flags, the script generates the list and reports whether it changed.
 
 ## What is a template
 
