@@ -20,15 +20,17 @@ This repository stores versioned OneMail email templates, validates pull request
 
 Central repository for email templates used by [OneMail](https://github.com/pagopa/onemail), PagoPA's email delivery building block.
 
-Product teams submit templates through pull requests. Validation checks their format and HTML; after merge, a GitHub Actions workflow publishes them directly to AWS SES and records their owning tenant in DynamoDB. Publication requires the platform configuration described below.
+Product teams submit templates through pull requests. Validation checks their format and HTML; after merge, a pipeline publishes them directly to AWS SES and records their owning tenant in DynamoDB.
 
 ## What is a template
 
 A template contains an email's subject, HTML body, and optional plain-text alternative. Handlebars placeholders such as `{{name}}` let callers personalize the message without sending the whole HTML each time. Clients use the template's `TemplateName` as their OneMail `templateId` and supply the values through the OneMail API.
 
-This repository owns versioned template files and the synchronization scripts. The [onemail repository](https://github.com/pagopa/onemail) owns the HTML sanitizer, infrastructure, and runtime template lookup.
+This repository owns versioned template files, the [onemail repository](https://github.com/pagopa/onemail) owns infrastructure.
 
 ## How to add a template?
+
+Each PR may change templates for **one client only**, including deletions. You need to:
 
 1. Create a branch from an up-to-date `main`.
 2. Add the file under `templates/<product>/<logical-name>/<version>/template.json`.
@@ -81,12 +83,6 @@ The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `H
 | Filename     | Always exactly `template.json`                                              | Not `welcome.json`       |
 | TemplateName | Matches the path                                                            | `ced_welcome-email_v1`   |
 
-The PR checks filenames and paths **before reading template content** and fails if they are invalid.
-
-The product folder also determines the SES tenant. For `templates/ced/...`, the tenant is `oml-d-tenant-ced` in dev, `oml-u-tenant-ced` in UAT, and `oml-p-tenant-ced` in production. Those tenants must already exist; adding a folder does not provision AWS resources. CODEOWNERS remains the source of repository ownership and review requirements.
-
-Before publishing a template, the sync script checks that its SES tenant exists in the target environment and region. If SES returns `NotFoundException`, the script skips the template without changing SES or DynamoDB, continues processing the others, and reports accumulated warnings at the end of the batch, including GitHub Actions warning annotations. Missing tenants alone do not fail the job; other AWS errors still do. The pipeline role requires `ses:GetTenant` for this check. After provisioning a missing tenant, rerun the original workflow or the affected publication job to publish the skipped templates; provisioning alone does not trigger publication. This check applies only to publication, not deletion.
-
 ## Check Your Changes Locally
 
 Requirements:
@@ -111,7 +107,7 @@ SANITIZER_URL=https://uat.onemail.pagopa.it/v1/emails/sanitize-template \
 
 For templates used only in UAT (or lower environments), you can update the existing version (for example, `templates/ced/welcome-email/v1/template.json`) to test revised content using the same template identifier.
 
-For templates also used in production, avoid changing the content of a version that product code already uses: callers of `ced_welcome-email_v1` would immediately receive the new content and could behave unexpectedly. Instead, you should add and publish a new version `v2`, migrate the product code to use `ced_welcome-email_v2`, then delete `v1` only after confirming no production callers still need it. A template update replaces the existing SES content.
+For templates used in production, avoid changing the content of a version that product code already uses: callers of `ced_welcome-email_v1` would immediately receive the new content and could behave unexpectedly. Instead, you should add and publish a new version `v2`, migrate the product code to use `ced_welcome-email_v2`, then delete `v1` only after confirming no production callers still need it. A template update replaces the existing SES content.
 
 ## Remove an existing template or version
 

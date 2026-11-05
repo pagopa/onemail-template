@@ -5,15 +5,16 @@ The **Sync templates** workflow applies template changes (new templates, modifie
 ## When publishing runs
 
 - A push to `main` branch that changes something under `templates/**` triggers the workflow.
-- A maintainer can also start it manually from **Actions > Sync templates > Run workflow**, selecting **main** branch, the environment and a client folder name (for example `ced`, not `templates/ced/`).
+- A maintainer can also start it manually selecting **main** branch, the environment and a client folder name (for example `ced`, not `templates/ced/`).
 
 On automatic run, the workflow detects `templates/**/template.json` changes against the previous commit: added, copied, modified, and renamed template files are synchronized; deleted template files are retired.
 
-On manual run, it publishes files matching `templates/<client>/*/*/template.json`, including also versions already published. It does not depend on the previous commit. In this case, existing templates are updated even if their content is unchanged. Manual publication never deletes resources, it only publish or update client templates inside the target folder.
+On manual run, it publishes files matching `templates/<client>/**/template.json` (it does not depend on the previous commit). In this case, existing templates are updated even if their content is unchanged. Manual run never deletes templates, it only publish or update client templates inside the target folder.
 
 ## Tenant prerequisites
 
-The product folder also determines the SES tenant. For `templates/ced/...`, the tenant is `oml-<env-short>-tenant-ced`.
+Each synchronization workflow belong to one client.
+The client folder also determines the SES tenant, for example: for `templates/ced/...` the tenant is `oml-<env-short>-tenant-ced`.
 
 ## What the workflow does
 
@@ -24,12 +25,12 @@ For each added or updated template:
 3. Creates the SES template, or updates it if SES reports that it already exists, then creates the tenant-resource association in the selected region.
 4. Writes an `ACTIVE` item to DynamoDB. The item contains `TemplateName`, `tenantName`, `lastModifiedDate`, and `status`.
 
-> Publication runs only if the tenant exists in the target environment and region. Otherwise, the template is skipped with a warning, without failing the job.
-
 For each deleted template:
 
 1. Removes the tenant-resource association and deletes the SES template in the selected region.
 2. Keeps a record in DynamoDB with status `RETIRED` and a `retiredAt` timestamp.
+
+> Publication runs only if the tenant exists in the target environment. Otherwise, the execution will be skipped with a warning, without failing the job. Deletion does not check tenant existence: the workflow still attempts template deletions also if there is no tenant association.
 
 ## Verify a run
 
@@ -40,7 +41,3 @@ After a merge, inspect the run for the merge commit. Check each expected job and
 The script uses a retry mode, with up to five attempts per call. It continues processing other paths after a template fails, then exits with a failure summary. Inspect the logs for the affected template.
 
 After correcting the issue, rerun the failed workflow to retry.
-
-## Local checks
-
-Run `ruby tests/manual-publication.test.rb` to test manual file selection and workflow wiring without AWS. The tests require Ruby with Minitest, Git, jq and Bash 4 or newer. If your default Bash is older, set `BASH_BIN` to a compatible executable.

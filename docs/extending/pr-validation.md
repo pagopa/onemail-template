@@ -1,10 +1,14 @@
 # PR Validation
 
-The **Validate templates** workflow runs for pull requests targeting `main`. It checks new and changed template assets.
+The **Validate templates** workflow runs for pull requests targeting `main`. It checks new and changed template files. 
+
+Each PR that changes templates must be scoped to a single client, corresponding to one tenant. PRs without template changes are allowed (documentation or script changes) and do not trigger client or template validation.
+
+
 
 ## Which files are checked?
 
-The workflow selects changed paths under `templates/**`. It takes added, copied, modified, and renamed paths. Deleted paths are not passed to the validator or HTML check.
+The workflow selects changed paths under `templates/**` (confined to a single client folder). It takes added, copied, modified, and renamed paths. Deleted paths are not passed to the validator or HTML sanitization check.
 
 The workflow uses templates data from the pull request, but uses the validation scripts from main branch. This prevents proposed pull request changes to the scripts from being used to validate that same pull request.
 
@@ -18,11 +22,8 @@ The workflow uses templates data from the pull request, but uses the validation 
 - `TemplateName` must match the client, template, and version derived from the path.
 - `TemplateContent` must contain `Subject` and `Html` as non-empty strings, with an optional string `Text`. No additional content fields are accepted.
 
-Next HTML check runs only if this validation job succeeds and there are selected template paths.
-
 ## HTML check
 
 [`scripts/sanitize-templates.sh`](../../scripts/sanitize-templates.sh) reads `TemplateContent.Html`, encodes it as the a JSON request body and sends it to the URL provided by the One Mail for sanitization.
 
 The script fails if the request does not succeed or if the response contains `isSanitized: true`, therefore the source template needs to be corrected.
-
