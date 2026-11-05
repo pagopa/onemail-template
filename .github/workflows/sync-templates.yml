@@ -29,8 +29,8 @@ jobs:
             contents: read
         outputs:
             matrix: ${{ steps.matrix.outputs.matrix }}
-            changed_files: ${{ steps.manual.outputs.files || steps.changes.outputs.all_changed_files }} # Added and modified template files
-            deleted_files: ${{ github.event_name == 'workflow_dispatch' && '[]' || steps.changes.outputs.deleted_files }} # Deleted template files
+            files_to_publish: ${{ steps.selection.outputs.files_to_publish }}
+            files_to_delete: ${{ steps.selection.outputs.files_to_delete }}
         steps:
             - name: Checkout
               uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
@@ -84,6 +84,11 @@ jobs:
                   CLIENT: ${{ inputs.client }}
               run: |
                   set -euo pipefail
+                  # Validate client name, preventing paths such as ../other-folder.
+                  if [[ ! $CLIENT =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
+                    echo '::error::Invalid client name.' >&2
+                    exit 1
+                  fi
                   if [[ -L templates || -L templates/$CLIENT || ! -d templates/$CLIENT ]]; then
                     printf '::error::Client folder does not exist.\n' >&2
                     exit 1
@@ -98,10 +103,31 @@ jobs:
                   selected=$(printf '%s\0' "${files[@]}" | jq -Rsc 'split("\u0000")[:-1]')
                   printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
+            - name: Prepare synchronization file lists
+              id: selection
+              shell: bash
+              env:
+                  MANUAL_FILES: ${{ steps.manual.outputs.files }}
+                  CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }}
+                  DELETED_FILES: ${{ steps.changes.outputs.deleted_files }}
+              run: |
+                  set -euo pipefail
+                  if [[ $GITHUB_EVENT_NAME == 'workflow_dispatch' ]]; then
+                    # Publish all templates for the selected client, without deletions.
+                    files_to_publish=$MANUAL_FILES
+                    files_to_delete='[]'
+                  else
+                    # Publish and delete only templates affected by the merged change.
+                    files_to_publish=$CHANGED_FILES
+                    files_to_delete=$DELETED_FILES
+                  fi
+                  echo "files_to_publish=$files_to_publish" >> "$GITHUB_OUTPUT"
+                  echo "files_to_delete=$files_to_delete" >> "$GITHUB_OUTPUT"
+
     synchronization:
         name: Sync templates - ${{ matrix.environment }}-${{ matrix.region }}
         needs: changes
-        if: github.ref == 'refs/heads/main' && (needs.changes.outputs.changed_files != '[]' || needs.changes.outputs.deleted_files != '[]')
+        if: github.ref == 'refs/heads/main' && (needs.changes.outputs.files_to_publish != '[]' || needs.changes.outputs.files_to_delete != '[]')
         runs-on: ubuntu-22.04
         timeout-minutes: 30
         strategy:
@@ -133,16 +159,16 @@ jobs:
                   ENV_SHORT: ${{ fromJSON('{"dev":"d","uat":"u","prod":"p"}')[matrix.environment] }}
                   AWS_ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
                   AWS_TEMPLATE_DB_TABLE: ${{ vars.AWS_TEMPLATE_DB_TABLE }}
-                  CHANGED_FILES: ${{ needs.changes.outputs.changed_files }}
-                  DELETED_FILES: ${{ needs.changes.outputs.deleted_files }}
+                  FILES_TO_PUBLISH: ${{ needs.changes.outputs.files_to_publish }}
+                  FILES_TO_DELETE: ${{ needs.changes.outputs.files_to_delete }}
               run: |
                   set -euo pipefail
                   failed=false
-                  mapfile -t files < <(jq -r '.[]' <<< "$CHANGED_FILES")
+                  mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES_TO_PUBLISH")
                   if [[ ${#files[@]} -gt 0 ]]; then
                     bash scripts/sync-ses-templates.sh -e "$ENV_SHORT" "${files[@]}" || failed=true
                   fi
-                  mapfile -t deleted < <(jq -r '.[]' <<< "$DELETED_FILES")
+                  mapfile -d '' -t deleted < <(jq -j '.[] | ., "\u0000"' <<< "$FILES_TO_DELETE")
                   if [[ ${#deleted[@]} -gt 0 ]]; then
                     bash scripts/sync-ses-templates.sh -e "$ENV_SHORT" -d "${deleted[@]}" || failed=true
                   fi

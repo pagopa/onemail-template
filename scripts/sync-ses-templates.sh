@@ -2,7 +2,7 @@
 # Purpose: Synchronize SES templates, tenant associations, and DynamoDB registry metadata.
 # Usage examples:
 #   bash scripts/sync-ses-templates.sh -e d templates/checkout/welcome/v1/template.json
-#   bash scripts/sync-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/payments/receipt/v1/template.json
+#   bash scripts/sync-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/checkout/receipt/v1/template.json
 #   bash scripts/sync-ses-templates.sh -e d -d templates/checkout/welcome/v1/template.json
 # AWS credentials, AWS_REGION, and AWS_ACCOUNT_ID are supplied by the pipeline.
 set -euo pipefail
@@ -22,6 +22,10 @@ if [[ -z $ENV_SHORT || $# -eq 0 ]]; then
     printf '❌ Provide -e env-short and template paths (deleted paths do not need to exist).\n' >&2
     exit 1
 fi
+
+script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+client=$(bash "$script_directory/check-single-client.sh" "$@")
+tenant="oml-$ENV_SHORT-tenant-$client"
 
 # Use AWS CLI retries for transient errors, without retrying the whole template sequence.
 export AWS_RETRY_MODE=standard AWS_MAX_ATTEMPTS=5
@@ -68,11 +72,6 @@ publish_template() {
     aws_call '' sesv2 update-email-template --cli-input-json "file://$path"
 }
 
-tenant_for_path() {
-    local client=${1#templates/}
-    printf 'oml-%s-tenant-%s' "$ENV_SHORT" "${client%%/*}"
-}
-
 sync_template() {
     local path=$1 name=$2 tenant=$3 resource status=ACTIVE date item values
     resource="arn:aws:ses:$AWS_REGION:$AWS_ACCOUNT_ID:template/$name" # Example: arn:aws:ses:eu-south-1:123456789012:template/checkout_welcome_v1.
@@ -107,39 +106,22 @@ sync_template() {
 
 # Finish independent templates before failing the batch, and list every failed template.
 FAILED=()
-SKIPPED_TEMPLATES_WARNINGS=()
-# Check all distinct publication tenants before modifying SES or DynamoDB.
-declare -A TENANT_EXISTS=()
-# Deletions do not require a tenant existence check.
+# Deletions do not require a tenant existence check
 # If a tenant does not exist the script try to delete the templates anyway (also if it has not a tenant association).
 if [[ $DELETE == false ]]; then
-    for path in "$@"; do
-        tenant=$(tenant_for_path "$path")
-        # skip if tenant was already checked
-        [[ -z ${TENANT_EXISTS[$tenant]:-} ]] || continue
-        # Block publication if tenant does not exist; errors must not trigger repeated checks.
-        TENANT_EXISTS[$tenant]=false
-        if output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
-            TENANT_EXISTS[$tenant]=true
-        elif [[ $output == *'(NotFoundException)'* ]]; then
-            # One warning covers all templates of the missing tenant without failing the batch.
-            SKIPPED_TEMPLATES_WARNINGS+=("Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; publication skipped for this tenant.")
+    if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+        if [[ $output == *'(NotFoundException)'* ]]; then
+            # Report skipped templates (missing tenant) as warnings
+            warning="Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; publication skipped for this tenant."
+            printf '::warning::%s\n' "$warning"
         else
-            # Other errors fail the batch, but checks for the remaining tenants continue.
             printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
+            exit 1
         fi
-    done
+    fi
 fi
 
 for path in "$@"; do
-    tenant=$(tenant_for_path "$path")
-    # Publish only for tenants confirmed by the preflight
-    # Deletions bypass this filter.
-    if [[ $DELETE == false ]]; then
-        if [[ ${TENANT_EXISTS[$tenant]:-false} != true ]]; then
-            continue
-        fi
-    fi
     # Example: templates/checkout/welcome/v1/template.json -> checkout/welcome/v1/template.json.
     name=${path#templates/}
     # Example: checkout/welcome/v1/template.json -> checkout/welcome/v1.
@@ -150,18 +132,6 @@ for path in "$@"; do
         FAILED+=("$name")
     fi
 done
-# Report skipped templates (missing tenants) as warnings
-if [[ ${#SKIPPED_TEMPLATES_WARNINGS[@]} -gt 0 ]]; then
-    printf '⚠️ WARNING: Skipped templates (%s):\n' "${#SKIPPED_TEMPLATES_WARNINGS[@]}" >&2
-    for warning in "${SKIPPED_TEMPLATES_WARNINGS[@]}"; do
-        # if running in GitHub Actions, show as a warning in the workflow
-        if [[ ${GITHUB_ACTIONS:-} == true ]]; then
-            printf '::warning::%s\n' "$warning"
-        else
-            printf '  - %s\n' "$warning" >&2
-        fi
-    done
-fi
 # Report failed templates
 if [[ ${#FAILED[@]} -gt 0 ]]; then
     printf '❌ Failed templates:\n' >&2

@@ -7,15 +7,12 @@ on:
 permissions: {}
 
 jobs:
-  get_and_validate:
-    name: Template structure validation
+  validate_templates:
+    name: Template validation
     runs-on: ubuntu-22.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
-    outputs:
-      has_templates: ${{ steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0' }}
-      files: ${{ steps.validate.outputs.files }}
     steps:
       # Read feature branch templates from the PR commit; do not execute its validation scripts.
       - name: Checkout feature branch data
@@ -43,42 +40,27 @@ jobs:
           skip_initial_fetch: true
           fail_on_initial_diff_error: true
 
-      # Run the trusted validator from the PR base, never scripts proposed by the PR.
-      - name: Checkout main branch validator
-        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: main_checkout
-          sparse-checkout: scripts
-          persist-credentials: false
-
-      - name: Validate changed templates with main branch script
-        id: validate
-        if: steps.changes.outputs.any_changed == 'true' || steps.changes.outputs.type_changed_files_count != '0'
+      - name: Prepare template file lists
+        id: selection
         shell: bash
-        working-directory: feature_checkout
         env:
-          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }} # Changed paths matching templates/**.
-          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }} # Paths whose Git object type changed, such as a regular file becoming a symlink.
-        # Merge and deduplicate changed files and type changed file, preserve filenames, then run the trusted validator.
+          CHANGED_FILES: ${{ steps.changes.outputs.all_changed_files }}
+          DELETED_FILES: ${{ steps.changes.outputs.deleted_files }}
+          TYPE_CHANGED_FILES: ${{ steps.changes.outputs.type_changed_files }}
         run: |
           set -euo pipefail
-          selected=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
-          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$selected")
-          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}" # Use main branch validator
-          printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
-  sanitize:
-    name: Template HTML content check
-    needs: get_and_validate
-    if: needs.get_and_validate.outputs.has_templates == 'true'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout main branch sanitization script
+          # Template paths to validate and sanitize (new and updated), excluding deletions.
+          files_to_validate=$(jq -cn --argjson changed "$CHANGED_FILES" --argjson types "$TYPE_CHANGED_FILES" '$changed + $types | unique')
+          # All template paths, including deletions.
+          all_files=$(jq -cn --argjson files "$files_to_validate" --argjson deleted "$DELETED_FILES" '$files + $deleted | unique')
+          
+          echo "files_to_validate=$files_to_validate" >> "$GITHUB_OUTPUT"
+          echo "all_files=$all_files" >> "$GITHUB_OUTPUT"
+
+      # Run the trusted validator from the PR base, never scripts proposed by the PR.
+      - name: Checkout main branch validator
+        if: steps.selection.outputs.all_files != '[]'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -86,36 +68,36 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Checkout Pull Request branch templates
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: feature_checkout
-          sparse-checkout: templates
-          persist-credentials: false
-
-      - name: Sanitize changed templates
+      - name: Check single client scope
+        if: steps.selection.outputs.all_files != '[]'
         shell: bash
         working-directory: feature_checkout
         env:
-          FILES: ${{ needs.get_and_validate.outputs.files }}
+          FILES: ${{ steps.selection.outputs.all_files }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
+          bash ../main_checkout/scripts/check-single-client.sh "${files[@]}"
+
+      - name: Validate changed templates with main branch script
+        if: steps.selection.outputs.files_to_validate != '[]'
+        shell: bash
+        working-directory: feature_checkout
+        env:
+          FILES: ${{ steps.selection.outputs.files_to_validate }}
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
+          bash ../main_checkout/scripts/validate-templates.sh "${files[@]}" # Use main branch validator
+
+      - name: Sanitize changed templates
+        if: steps.selection.outputs.files_to_validate != '[]'
+        shell: bash
+        working-directory: feature_checkout
+        env:
+          FILES: ${{ steps.selection.outputs.files_to_validate }}
           SANITIZER_URL: ${{ secrets.SANITIZER_URL }}
         run: |
           set -euo pipefail
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
           bash ../main_checkout/scripts/sanitize-templates.sh "${files[@]}" # Use main branch sanitization script
-
-  validation-result:
-    name: Template validation
-    needs: [get_and_validate, sanitize]
-    if: always()
-    runs-on: ubuntu-22.04
-    timeout-minutes: 1
-    permissions: {}
-    steps:
-      - name: Reject failed or missing required checks
-        if: >-
-          needs.get_and_validate.result != 'success' ||
-          (needs.get_and_validate.outputs.has_templates == 'true' && needs.sanitize.result != 'success') ||
-          (needs.get_and_validate.outputs.has_templates != 'true' && needs.sanitize.result != 'skipped')
-        run: exit 1
