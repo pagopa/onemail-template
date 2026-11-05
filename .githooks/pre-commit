@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Purpose: Keep docs/templates-tree.md and the README managed templates tree aligned with templates/.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Run only when the commit adds, deletes, or renames template files.
+git diff --cached --name-only --diff-filter=ADR -- 'templates/**/template.json' | grep -q . || exit 0
+
+bash scripts/generate-template-tree.sh >/dev/null
+
+# Abort instead of auto-staging, so unrelated unstaged README edits never slip into the commit.
+if ! git diff --quiet -- docs/templates-tree.md README.md; then
+    printf '❌ Managed templates tree updated. Review and stage it, then commit again:\n' >&2
+    printf '   git add docs/templates-tree.md README.md\n' >&2
+    exit 1
+fi
