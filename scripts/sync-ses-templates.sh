@@ -2,7 +2,7 @@
 # Purpose: Synchronize SES templates, tenant associations, and DynamoDB registry metadata.
 # Usage examples:
 #   bash scripts/sync-ses-templates.sh -e d templates/checkout/welcome/v1/template.json
-#   bash scripts/sync-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/payments/receipt/v1/template.json
+#   bash scripts/sync-ses-templates.sh -e p templates/checkout/welcome/v1/template.json templates/checkout/receipt/v1/template.json
 #   bash scripts/sync-ses-templates.sh -e d -d templates/checkout/welcome/v1/template.json
 # AWS credentials, AWS_REGION, and AWS_ACCOUNT_ID are supplied by the pipeline.
 set -euo pipefail
@@ -22,6 +22,10 @@ if [[ -z $ENV_SHORT || $# -eq 0 ]]; then
     printf '❌ Provide -e env-short and template paths (deleted paths do not need to exist).\n' >&2
     exit 1
 fi
+
+script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+client=$(bash "$script_directory/check-single-client.sh" "$@")
+tenant="oml-$ENV_SHORT-tenant-$client"
 
 # Use AWS CLI retries for transient errors, without retrying the whole template sequence.
 export AWS_RETRY_MODE=standard AWS_MAX_ATTEMPTS=5
@@ -69,13 +73,7 @@ publish_template() {
 }
 
 sync_template() {
-    local path=$1 name=$2 client_path client tenant resource status=ACTIVE date item values output
-    # Example path: templates/checkout/welcome/v1/template.json.
-    client_path=${path%/*}         # Remove template.json: templates/checkout/welcome/v1.
-    client_path=${client_path%/*}  # Remove v1: templates/checkout/welcome.
-    client_path=${client_path%/*}  # Remove welcome: templates/checkout.
-    client=${client_path##*/}      # Keep the last folder name: checkout.
-    tenant="oml-$ENV_SHORT-tenant-$client" # With ENV_SHORT=d: oml-d-tenant-checkout.
+    local path=$1 name=$2 tenant=$3 resource status=ACTIVE date item values
     resource="arn:aws:ses:$AWS_REGION:$AWS_ACCOUNT_ID:template/$name" # Example: arn:aws:ses:eu-south-1:123456789012:template/checkout_welcome_v1.
     printf 'ℹ️ Synchronizing %s for %s in %s\n' "$name" "$tenant" "$AWS_REGION" # Log template, tenant, and region; no AWS call.
 
@@ -88,23 +86,6 @@ sync_template() {
         aws_call NotFoundException sesv2 delete-email-template --template-name "$name" || return 1
         status=RETIRED
     else
-        # An unset entry triggers the AWS check; cached true/false values reuse its result.
-        if [[ -z ${TENANT_EXISTS[$tenant]:-} ]]; then
-            if output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
-                TENANT_EXISTS[$tenant]=true
-            elif [[ $output == *'(NotFoundException)'* ]]; then
-                TENANT_EXISTS[$tenant]=false
-            else
-                # Cache only confirmed presence or absence, never other AWS errors.
-                printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
-                return 1
-            fi
-        fi
-        # Skip every template of an absent tenant, keeping one warning per template.
-        if [[ ${TENANT_EXISTS[$tenant]} == false ]]; then
-            WARNINGS+=("$name: tenant $tenant does not exist in $AWS_REGION; publication skipped.")
-            return 0
-        fi
         publish_template "$path" "$name" || return 1
         aws_call AlreadyExistsException sesv2 create-tenant-resource-association \
             --tenant-name "$tenant" --resource-arn "$resource" || return 1
@@ -125,31 +106,34 @@ sync_template() {
 
 # Finish independent templates before failing the batch, and list every failed template.
 FAILED=()
-WARNINGS=()
-# Tenant cache shared across templates; environment and region are fixed for this run.
-declare -A TENANT_EXISTS=()
+# Deletions do not require a tenant existence check
+# If a tenant does not exist the script try to delete the templates anyway (also if it has not a tenant association).
+if [[ $DELETE == false ]]; then
+    if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+        if [[ $output == *'(NotFoundException)'* ]]; then
+            # Report skipped templates (missing tenant) as warnings
+            warning="Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; publication skipped for this tenant."
+            printf '::warning::%s\n' "$warning"
+            exit 0
+        else
+            printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
+            exit 1
+        fi
+    fi
+fi
+
 for path in "$@"; do
-    # PR validation enforces the naming contract; here we only convert the trusted path.
     # Example: templates/checkout/welcome/v1/template.json -> checkout/welcome/v1/template.json.
     name=${path#templates/}
     # Example: checkout/welcome/v1/template.json -> checkout/welcome/v1.
     name=${name%/template.json}
     # Example: checkout/welcome/v1 -> checkout_welcome_v1 (the SES template name).
     name=${name//\//_}
-    if ! sync_template "$path" "$name"; then
+    if ! sync_template "$path" "$name" "$tenant"; then
         FAILED+=("$name")
     fi
 done
-if [[ ${#WARNINGS[@]} -gt 0 ]]; then
-    printf '⚠️ WARNING: Skipped templates (%s):\n' "${#WARNINGS[@]}" >&2
-    for warning in "${WARNINGS[@]}"; do
-        if [[ ${GITHUB_ACTIONS:-} == true ]]; then
-            printf '::warning::%s\n' "$warning"
-        else
-            printf '  - %s\n' "$warning" >&2
-        fi
-    done
-fi
+# Report failed templates
 if [[ ${#FAILED[@]} -gt 0 ]]; then
     printf '❌ Failed templates:\n' >&2
     printf '  - %s\n' "${FAILED[@]}" >&2
