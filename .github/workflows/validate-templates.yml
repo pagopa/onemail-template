@@ -60,13 +60,19 @@ jobs:
 
       # Run the trusted validator from the PR base, never scripts proposed by the PR.
       - name: Checkout main branch validator
-        if: steps.selection.outputs.all_files != '[]'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1 https://github.com/actions/checkout/releases/tag/v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: main_checkout
           sparse-checkout: scripts
           persist-credentials: false
+
+      - name: Check if templates catalog is up to date
+        shell: bash
+        working-directory: feature_checkout
+        run: |
+          set -euo pipefail
+          bash ../main_checkout/scripts/generate-template-tree.sh --check
 
       - name: Check single client scope
         if: steps.selection.outputs.all_files != '[]'

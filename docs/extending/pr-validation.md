@@ -12,6 +12,10 @@ The workflow selects changed paths under `templates/**` (confined to a single cl
 
 The workflow uses templates data from the pull request, but uses the validation scripts from main branch. This prevents proposed pull request changes to the scripts from being used to validate that same pull request.
 
+## Managed templates catalog
+
+Every PR runs `generate-template-tree.sh --check` to check if the templates catalog file is up to date, an outdated catalog fails the check. Run `bash scripts/generate-template-tree.sh` locally and include the updated catalog in the PR.
+
 ## Path and JSON validation
 
 [`scripts/validate-templates.sh`](../../scripts/validate-templates.sh) checks each selected path and file:
