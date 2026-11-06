@@ -50,24 +50,24 @@ doc_content=$(printf '# Managed templates\n\nTemplate identifiers (`TemplateName
 
 if [[ -f $doc_file && $(cat "$doc_file") == "$doc_content" ]]; then
     if [[ $mode != check-and-update ]]; then
-        printf '%s is already up to date; no changes made.\n' "$doc_file"
+        printf '✅ %s is already up to date; no changes made.\n' "$doc_file"
     fi
     exit 0
 fi
 
 if [[ $mode == check ]]; then
-    printf '%s is missing or does not match the current templates. No changes made.\n' "$doc_file" >&2
-    printf 'Run: bash scripts/generate-template-tree.sh\n' >&2
+    printf '❌ %s does not match the current templates.\n' "$doc_file" >&2
+    printf 'No changes made. To update, run: bash scripts/generate-template-tree.sh\n' >&2
     exit 1
 fi
 
 printf '%s\n' "$doc_content" > "$doc_file"
 
 if [[ $mode == check-and-update ]]; then
-    printf 'Template list mismatch detected: %s was missing or outdated and has been automatically regenerated to match the current templates.\n' "$doc_file" >&2
-    printf 'Review and stage the corrected file, then retry:\n' >&2
+    printf '⚠️ Template list mismatch detected: %s was outdated and has been regenerated.\n' "$doc_file" >&2
+    printf 'Review and stage the updated file:\n' >&2
     printf '   git add %s\n' "$doc_file" >&2
     exit 1
 fi
 
-printf 'Generated %s from the current templates (%s clients, %s templates).\n' "$doc_file" "$clients" "${#entries[@]}"
+printf '✅ Generated %s from the current templates (%s clients, %s templates).\n' "$doc_file" "$clients" "${#entries[@]}"
