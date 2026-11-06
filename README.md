@@ -1,14 +1,11 @@
 # One Mail Templates
 
-## Summary
-
-This repository stores versioned OneMail email templates, validates pull requests, and synchronizes approved changes to AWS SES.
-
 ## Contents
 
 - [What is this repo?](#what-is-this-repo)
 - [Managed templates](#managed-templates)
 - [What is a template?](#what-is-a-template)
+- [Prerequisites](#prerequisites)
 - [How to add a template](#how-to-add-a-template)
   - [Example](#example)
   - [Naming rules](#naming-rules)
@@ -22,21 +19,18 @@ This repository stores versioned OneMail email templates, validates pull request
 
 Central repository for email templates used by [OneMail](https://github.com/pagopa/onemail), PagoPA's email delivery building block.
 
-Product teams submit templates through pull requests. Validation checks their format and HTML; after merge, a pipeline publishes them directly to AWS SES and records their owning tenant in DynamoDB.
+Product teams submit templates through pull requests. Validation checks their format and HTML; after merge, a pipeline publishes them directly to AWS SES and records their metadata in DynamoDB.
 
 ## Managed templates
 
-See [the managed templates list](docs/templates-tree.md) for clients and template identifiers currently managed by this repository. After adding or removing templates, refresh the list with `bash scripts/generate-template-tree.sh`.
+See [the managed templates list](docs/templates-tree.md) for clients and template identifiers currently managed by this repository. 
 
-To have this checked automatically, enable the repository pre-commit hook once per clone:
+After adding, removing or renaming templates, refresh the list with `bash scripts/generate-template-tree.sh`. To keep the template catalog automatically up to date, enable the repository’s pre-commit:
+
 
 ```bash
 git config core.hooksPath .githooks
 ```
-
-On every commit, the hook checks `docs/templates-tree.md` on disk against all `template.json` files in the working tree, regardless of which files are staged. If the file is outdated or missing, the hook regenerates it and aborts the commit so you can review and stage it. If the list is already correct on disk, the hook allows the commit without checking staging or asking for `git add`. Unstaged and untracked templates are included too. The README is not regenerated.
-
-The hook calls `bash scripts/generate-template-tree.sh --check-and-update` once: this mode exits silently with code `0` when the list is correct, or reports the mismatch and automatic correction and exits with code `1` when outdated or missing. Use `--check` for a read-only check; without flags, the script generates the list and reports whether it changed.
 
 ## What is a template
 
@@ -44,16 +38,32 @@ A template contains an email's subject, HTML body, and optional plain-text alter
 
 This repository owns versioned template files, the [onemail repository](https://github.com/pagopa/onemail) owns infrastructure.
 
+## Prerequisites
+
+- Git
+- Bash
+- jq
+
+After cloning the repository, run this command from the repository root to enable the pre-commit hook (once per clone):
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## How to add a template?
 
-Each PR may change templates for **one client only**, including deletions. You need to:
+> [!IMPORTANT]
+> Each PR may include template changes for **one client only**. 
 
-1. Create a branch from an up-to-date `main`.
-2. Add the file under `templates/<product>/<logical-name>/<version>/template.json`.
-3. Set `TemplateName` to `<product>_<logical-name>_<version>` and add your email content.
-4. Refresh the [managed templates](#managed-templates) tree with `bash scripts/generate-template-tree.sh`, run the local checks below and open a PR. Resolve validation errors before merging.
-5. Wait for approval from the BB team (the repository owners), then merge the PR.
-6. After merge, check the **Sync templates** workflow for the result (a merged PR alone does not prove the upload succeeded).
+You need to:
+
+1. Ensure the repository’s pre-commit hook is enabled in order to keep templates tree file update (see [Prerequisites](#prerequisites)).
+2. Create a branch from an up-to-date `main`.
+3. Add the file under `templates/<product>/<logical-name>/<version>/template.json`.
+4. Set `TemplateName` to `<product>_<logical-name>_<version>` and add your email content.
+5. Run the local checks below and open a PR. Resolve validation errors before merging.
+6. Wait for approval from the BB team (the repository owners), then merge the PR.
+7. After merge, check the **Sync templates** workflow for the result (a merged PR alone does not prove the upload succeeded).
 
 To generate the initial JSON structure, you can run from the repository root:
 
@@ -100,13 +110,6 @@ The file contains exactly `TemplateName` and `TemplateContent`. `Subject` and `H
 | TemplateName | Matches the path                                                            | `ced_welcome-email_v1`   |
 
 ## Check Your Changes Locally
-
-Requirements:
-
-- bash
-- jq
-- curl
-- network access (for the HTML check).
 
 Run from the repository root and pass the files you want to check explicitly:
 
