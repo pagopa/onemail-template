@@ -7,6 +7,7 @@ This repository stores versioned OneMail email templates, validates pull request
 ## Contents
 
 - [What is this repo?](#what-is-this-repo)
+- [Managed templates](#managed-templates)
 - [What is a template?](#what-is-a-template)
 - [How to add a template](#how-to-add-a-template)
   - [Example](#example)
@@ -14,6 +15,7 @@ This repository stores versioned OneMail email templates, validates pull request
 - [Check your changes locally](#check-your-changes-locally)
 - [Update an existing template](#update-an-existing-template)
 - [Remove an existing template or version](#remove-an-existing-template-or-version)
+- [Prepare a PR with Copilot](#prepare-a-pr-with-copilot)
 - [Workflow guides](#workflow-guides)
 
 ## What is this repo?
@@ -21,6 +23,20 @@ This repository stores versioned OneMail email templates, validates pull request
 Central repository for email templates used by [OneMail](https://github.com/pagopa/onemail), PagoPA's email delivery building block.
 
 Product teams submit templates through pull requests. Validation checks their format and HTML; after merge, a pipeline publishes them directly to AWS SES and records their owning tenant in DynamoDB.
+
+## Managed templates
+
+See [the managed templates list](docs/templates-tree.md) for clients and template identifiers currently managed by this repository. After adding or removing templates, refresh the list with `bash scripts/generate-template-tree.sh`.
+
+To have this checked automatically, enable the repository pre-commit hook once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+On every commit, the hook checks `docs/templates-tree.md` on disk against all `template.json` files in the working tree, regardless of which files are staged. If the file is outdated or missing, the hook regenerates it and aborts the commit so you can review and stage it. If the list is already correct on disk, the hook allows the commit without checking staging or asking for `git add`. Unstaged and untracked templates are included too. The README is not regenerated.
+
+The hook calls `bash scripts/generate-template-tree.sh --check-and-update` once: this mode exits silently with code `0` when the list is correct, or reports the mismatch and automatic correction and exits with code `1` when outdated or missing. Use `--check` for a read-only check; without flags, the script generates the list and reports whether it changed.
 
 ## What is a template
 
@@ -35,7 +51,7 @@ Each PR may change templates for **one client only**, including deletions. You n
 1. Create a branch from an up-to-date `main`.
 2. Add the file under `templates/<product>/<logical-name>/<version>/template.json`.
 3. Set `TemplateName` to `<product>_<logical-name>_<version>` and add your email content.
-4. Run the local checks below and open a PR. Resolve validation errors before merging.
+4. Refresh the [managed templates](#managed-templates) tree with `bash scripts/generate-template-tree.sh`, run the local checks below and open a PR. Resolve validation errors before merging.
 5. Wait for approval from the BB team (the repository owners), then merge the PR.
 6. After merge, check the **Sync templates** workflow for the result (a merged PR alone does not prove the upload succeeded).
 
@@ -116,6 +132,10 @@ To retire a template, delete its exact file in a PR, for example `templates/ced/
 After the deletion is merged, the synchronization workflow removes the SES template.
 
 Coordinate deletion with consumers before merging: removing the SES template can affect clients that still reference its identifier.
+
+## Prepare a PR with Copilot
+
+The [`onemail-template-pr`](.github/agents/onemail-template-pr.agent.md) Copilot agent prepares the files for a template PR (in Italian or English), for example: _"partendo da questo repo con i template preparami una PR verso onemail-template"_. It creates or updates the template files with the repository scripts, validates them, refreshes the [managed templates](#managed-templates) tree, and drafts the PR description. It never commits or pushes.
 
 ## Workflow Guides
 

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Purpose: Keep docs/templates-tree.md aligned with all templates/ files on every commit.
+# Enable once per clone: git config core.hooksPath .githooks
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+bash scripts/generate-template-tree.sh --check-and-update
