@@ -114,6 +114,7 @@ if [[ $DELETE == false ]]; then
             # Report skipped templates (missing tenant) as warnings
             warning="Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; publication skipped for this tenant."
             printf '::warning::%s\n' "$warning"
+            exit 0
         else
             printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
             exit 1
