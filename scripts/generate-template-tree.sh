@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Purpose: Regenerate the managed templates tree in docs/templates-tree.md.
-# Usage:
+# Usage (run from the repository root):
 #   bash scripts/generate-template-tree.sh          # update docs/templates-tree.md
 #   bash scripts/generate-template-tree.sh --check  # fail if docs/templates-tree.md is out of date
 #   bash scripts/generate-template-tree.sh --check-and-update  # update if stale and exit 1; otherwise exit 0
@@ -14,13 +14,13 @@ case ${1-} in
     *) printf 'Usage: %s [--check|--check-and-update]\n' "$0" >&2; exit 1 ;;
 esac
 
-script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-cd "$script_directory/.."
-
 doc_file=docs/templates-tree.md
 pattern='^templates/([a-z][a-z0-9]*(-[a-z0-9]+)*)/([a-z][a-z0-9]*(-[a-z0-9]+)*)/(v[1-9][0-9]*)/template\.json$'
 
-[[ -d templates ]] || { printf '❌ Templates directory not found.\n' >&2; exit 1; }
+[[ -d templates && -d docs ]] || {
+    printf '❌ Run this script from the repository root.\n' >&2
+    exit 1
+}
 
 # Collect "<client> <template-id>" pairs only from paths that follow the repository convention.
 entries=()
