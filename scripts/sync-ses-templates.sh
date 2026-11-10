@@ -94,12 +94,12 @@ sync_template() {
     # Publish metadata only after local SES operations succeed; retain a tombstone on deletion.
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
     item=$(jq -cn --arg name "$name" --arg tenant "$tenant" --arg date "$date" --arg status "$status" '
-        {TemplateName:{S:$name}, tenantName:{S:$tenant}, lastModifiedDate:{S:$date}, status:{S:$status}} +
+        {templateName:{S:$name}, tenantName:{S:$tenant}, lastModifiedDate:{S:$date}, status:{S:$status}} +
         (if $status == "RETIRED" then {retiredAt:{S:$date}} else {} end)
     ') || return 1
     values=$(jq -cn --arg tenant "$tenant" '{":tenant":{S:$tenant}}') || return 1
     aws_call '' --region "$REGISTRY_REGION" dynamodb put-item --table-name "$TABLE_NAME" \
-        --item "$item" --condition-expression 'attribute_not_exists(TemplateName) OR tenantName = :tenant' \
+        --item "$item" --condition-expression 'attribute_not_exists(templateName) OR tenantName = :tenant' \
         --expression-attribute-values "$values" || return 1
     printf '✅ Synchronized %s: %s\n' "$name" "$status"
 }
