@@ -100,7 +100,8 @@ jobs:
                     printf '::error::No template files found for this client.\n' >&2
                     exit 1
                   fi
-                  selected=$(printf '%s\0' "${files[@]}" | jq -Rsc 'split("\u0000")[:-1]')
+                  selected=$(jq -cn --args '$ARGS.positional' "${files[@]}")
+                  printf 'Selected %s template(s) for %s:\n' "${#files[@]}" "$CLIENT"
                   printf 'files=%s\n' "$selected" >> "$GITHUB_OUTPUT"
 
             - name: Prepare synchronization file lists
@@ -121,6 +122,8 @@ jobs:
                     files_to_publish=$CHANGED_FILES
                     files_to_delete=$DELETED_FILES
                   fi
+                  printf 'Templates to publish: %s\n' "$files_to_publish"
+                  printf 'Templates to delete: %s\n' "$files_to_delete"
                   echo "files_to_publish=$files_to_publish" >> "$GITHUB_OUTPUT"
                   echo "files_to_delete=$files_to_delete" >> "$GITHUB_OUTPUT"
 
