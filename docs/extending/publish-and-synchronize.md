@@ -23,7 +23,7 @@ For each added or updated template:
 1. Get the SES template name (derived from the path).
 2. Derives the tenant name from the client directory. For example, the `ced` client in `uat` uses `oml-u-tenant-ced`.
 3. Creates the SES template, or updates it if SES reports that it already exists, then creates the tenant-resource association in the selected region.
-4. Writes an `ACTIVE` item to DynamoDB. The item contains `TemplateName`, `tenantName`, `lastModifiedDate`, and `status`.
+4. Writes an `ACTIVE` item to DynamoDB. The item contains `templateName`, `tenantName`, `lastModifiedDate`, and `status`.
 
 For each deleted template:
 
