@@ -31,7 +31,7 @@ For each deleted template:
 2. If the tenant does not exist, deletes the SES template directly without attempting to remove an association.
 3. Keeps a record in DynamoDB with status `RETIRED` and a `retiredAt` timestamp.
 
-> The sync checks for the tenant before processing affected templates. If it is absent, added or modified templates are skipped with a warning. Deleted templates are removed from SES and recorded as `RETIRED` without attempting to remove a tenant-resource association. This AWS cleanup runs after changes reach `main`, not in the read-only pull request validation workflow.
+> The sync checks for the tenant before processing affected templates. If it is absent, added or modified templates are skipped with a warning. For deleted templates, the sync attempts to delete them from SES without attempting to remove a tenant-resource association. After successful cleanup, they are recorded as `RETIRED` in DynamoDB.
 
 ## Verify a run
 

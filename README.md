@@ -138,7 +138,12 @@ Coordinate deletion with consumers before merging: removing the SES template can
 
 ## Prepare a PR with Copilot
 
-The [`onemail-template-pr`](.github/agents/onemail-template-pr.agent.md) Copilot agent prepares the files for a template PR (in Italian or English), for example: _"partendo da questo repo con i template preparami una PR verso onemail-template"_. It creates or updates the template files with the repository scripts, validates them, refreshes the [managed templates](#managed-templates) tree, and drafts the PR description. It never commits or pushes.
+Use the [`onemail-template-pr`](.github/agents/onemail-template-pr.agent.md) Copilot agent to prepare template changes, run validation, update the catalog, and draft a PR description. For example:
+
+- _"Prepare a template PR using the templates in this folder."_
+- _"Create ced welcome-email v1 using the subject, HTML, and plain text below, and prepare the PR changes: ..."_
+
+The agent does not invent email content, commit, push, or open the PR.
 
 ## Workflow Guides
 
