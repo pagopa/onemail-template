@@ -27,10 +27,11 @@ For each added or updated template:
 
 For each deleted template:
 
-1. Removes the tenant-resource association and deletes the SES template in the selected region.
-2. Keeps a record in DynamoDB with status `RETIRED` and a `retiredAt` timestamp.
+1. If the tenant exists, removes the tenant-resource association and deletes the SES template in the selected region.
+2. If the tenant does not exist, deletes the SES template directly without attempting to remove an association.
+3. Keeps a record in DynamoDB with status `RETIRED` and a `retiredAt` timestamp.
 
-> Publication runs only if the tenant exists in the target environment. Otherwise, the execution will be skipped with a warning, without failing the job. Deletion does not check tenant existence: the workflow still attempts template deletions also if there is no tenant association.
+> The sync checks for the tenant before processing affected templates. If it is absent, added or modified templates are skipped with a warning. For deleted templates, the sync attempts to delete them from SES without attempting to remove a tenant-resource association. After successful cleanup, they are recorded as `RETIRED` in DynamoDB.
 
 ## Verify a run
 

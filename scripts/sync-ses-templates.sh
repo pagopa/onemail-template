@@ -75,14 +75,16 @@ publish_template() {
 sync_template() {
     local path=$1 name=$2 tenant=$3 resource status=ACTIVE date item values
     resource="arn:aws:ses:$AWS_REGION:$AWS_ACCOUNT_ID:template/$name" # Example: arn:aws:ses:eu-south-1:123456789012:template/checkout_welcome_v1.
-    printf 'ℹ️ Synchronizing %s for %s in %s\n' "$name" "$tenant" "$AWS_REGION" # Log template, tenant, and region; no AWS call.
+    printf 'Synchronizing %s for %s in %s\n' "$name" "$tenant" "$AWS_REGION" # Log template, tenant, and region; no AWS call.
 
     # Explicit guards stop this template at the first error, even when called inside an if.
     # SES and DynamoDB cannot share a transaction: reruns complete any partial work forward.
-    # Missing associations and templates are already in the desired state during deletion.
+    # Missing associations and templates are already in the desired state during deletion (NotFoundException ignored).
     if [[ $DELETE == true ]]; then
-        aws_call NotFoundException sesv2 delete-tenant-resource-association \
-            --tenant-name "$tenant" --resource-arn "$resource" || return 1
+        if [[ $TENANT_EXISTS == true ]]; then
+            aws_call NotFoundException sesv2 delete-tenant-resource-association \
+                --tenant-name "$tenant" --resource-arn "$resource" || return 1
+        fi
         aws_call NotFoundException sesv2 delete-email-template --template-name "$name" || return 1
         status=RETIRED
     else
@@ -106,19 +108,23 @@ sync_template() {
 
 # Finish independent templates before failing the batch, and list every failed template.
 FAILED=()
-# Deletions do not require a tenant existence check
-# If a tenant does not exist the script try to delete the templates anyway (also if it has not a tenant association).
-if [[ $DELETE == false ]]; then
-    if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
-        if [[ $output == *'(NotFoundException)'* ]]; then
-            # Report skipped templates (missing tenant) as warnings
+TENANT_EXISTS=true
+# Check tenant existence to skip publication and association cleanup when the tenant is absent.
+
+if ! output=$(aws_request sesv2 get-tenant --tenant-name "$tenant" 2>&1); then
+    if [[ $output == *'(NotFoundException)'* ]]; then
+        TENANT_EXISTS=false
+        if [[ $DELETE == false ]]; then
             warning="Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; publication skipped for this tenant."
             printf '::warning::%s\n' "$warning"
             exit 0
         else
-            printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
-            exit 1
+            warning="Tenant $tenant does not exist in environment $ENV_SHORT, region $AWS_REGION; tenant association cleanup skipped. Template deletion will still be attempted."
+            printf '::warning::%s\n' "$warning"
         fi
+    else
+        printf '❌ Cannot check SES tenant %s: %s\n' "$tenant" "$output" >&2
+        exit 1
     fi
 fi
 
