@@ -30,8 +30,8 @@ ced
 cloudstrategy
 |--cloudstrategy_account-creation-notification_v1
 
-io
-|--io_it-wallet-activation-reminder_v1
+news-ioapp
+|--news-ioapp_it-wallet-activation-reminder_v1
 
 onemail
 |--onemail_my-template_v1
