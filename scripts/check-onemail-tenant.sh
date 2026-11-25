@@ -6,10 +6,6 @@ set -euo pipefail
 
 [[ $# -eq 1 ]] || { printf 'Usage: %s <client>\n' "$0" >&2; exit 1; }
 client=$1
-[[ $client =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]] || {
-    printf 'Invalid client name: %s\n' "$client" >&2
-    exit 1
-}
 
 for command in curl jq; do
     command -v "$command" >/dev/null 2>&1 || {

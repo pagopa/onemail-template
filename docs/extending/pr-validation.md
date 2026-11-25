@@ -8,13 +8,13 @@ Each PR that changes templates must be scoped to a single client, corresponding 
 
 ## Which files are checked?
 
-The workflow selects changed paths under `templates/**` (confined to a single client folder). It takes added, copied, modified, and renamed paths. Deleted paths are not passed to the validator or HTML sanitization check.
+The workflow selects changed paths under `templates/**` (confined to a single client folder), excluding `.gitkeep` placeholders. It takes added, copied, modified, and renamed paths. Deleted paths are not passed to the validator or HTML sanitization check.
 
 The workflow uses templates data from the pull request, but uses the validation scripts from main branch. This prevents proposed pull request changes to the scripts from being used to validate that same pull request.
 
 ## Tenant validation
 
-For any changed template path, including deletions, the client folder must match a top-level tenant key in OneMail's [`tenants.json`](https://github.com/pagopa/onemail/blob/main/src/infra/src/data/tenants/tenants.json). The check fetches the current file directly from `main` and fails if the client is missing or the configuration cannot be retrieved or parsed. This confirms configuration, not deployment to an environment.
+For added or modified templates, the client folder must match a top-level tenant key in OneMail's [`tenants.json`](https://github.com/pagopa/onemail/blob/main/src/infra/src/data/tenants/tenants.json). Deletion-only PRs do not trigger this check. The check fetches the current file directly from `main` and fails if the client is missing or the configuration cannot be retrieved or parsed. This confirms configuration, not deployment to an environment.
 
 ## Managed templates catalog
 
