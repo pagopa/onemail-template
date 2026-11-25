@@ -23,27 +23,28 @@ Always reply in the language used by the user (Italian or English).
 - Path: `templates/<client>/<template>/<vN>/template.json`; client and template are lowercase kebab-case starting with a letter; version is `v` + positive integer without leading zeros.
 - JSON contains exactly `TemplateName` and `TemplateContent`; `TemplateName` is `<client>_<template>_<vN>`; `TemplateContent` has non-empty `Subject` and `Html` strings and an optional `Text` string. No other fields.
 - Placeholders use Handlebars syntax (`{{name}}`); keep them unchanged.
-- The client folder maps to the SES tenant `oml-<env>-tenant-<client>`: a brand-new client requires that tenant to already exist, so warn the user about it.
+- The client folder maps to the tenant key in OneMail's `src/infra/src/data/tenants/tenants.json`, and to the SES tenant `oml-<env>-tenant-<client>`. The repository configuration does not prove deployment to AWS; tenant domains can differ by environment.
 
 ## Approach
 
 1. **Understand the request.** Identify the source (another repo/folder, files, or pasted content), the target client, the templates involved, and the operation (add, update, delete). If something essential is missing or ambiguous (client name, template names, version, mapping of source files to templates), ask before writing files.
 2. **Inspect the current state.** Run `git status` and `git branch --show-current`. If the working tree has unrelated changes or the current branch is `main`, tell the user and propose a branch name such as `feat/<client>-<short-description>` (create it only on confirmation). List existing templates for the client under `templates/<client>/`.
-3. **Read the source.** Explore the source location the user provided (read-only). Map each email to `<client>/<template>/<vN>`, extracting Subject, HTML body and plain-text alternative. Convert placeholders from other syntaxes to Handlebars only if the user agrees. Present the mapping as a table and get confirmation before writing when you had to infer names.
-4. **Create or update the files.**
+3. **Verify the client before creating a template or version.** Follow the [OneMail tenant verification skill](../skills/verify-onemail-tenant/SKILL.md) with the requested client. If the client is absent, ask whether the user intended one of the returned tenants without a template folder; do not choose a replacement without confirmation, and verify the confirmed name. If verification fails or remains unresolved, stop before creating any files or directories. This check is not required for an update or deletion that creates no new template or version.
+4. **Read the source.** Explore the source location the user provided (read-only). Map each email to `<client>/<template>/<vN>`, extracting Subject, HTML body and plain-text alternative. Convert placeholders from other syntaxes to Handlebars only if the user agrees. Present the mapping as a table and get confirmation before writing when you had to infer names.
+5. **Create or update the files.**
    - New template or version: run `bash scripts/create-template.sh <client> <template> [vN]` to scaffold, then fill `Subject`, `Html` and `Text`.
    - Fill content with `jq` so HTML is JSON-escaped correctly, e.g. `jq --rawfile html <source.html> --arg subject '<subject>' --rawfile text <source.txt> '.TemplateContent.Subject=$subject | .TemplateContent.Html=$html | .TemplateContent.Text=$text' <file> > <file>.tmp && mv <file>.tmp <file>`. Drop `Text` only if no plain-text alternative exists and the user accepts it.
    - Delete: remove exactly the `template.json` files requested and the empty parent folders; remind the user to coordinate with consumers.
-5. **Validate.** Run `bash scripts/validate-templates.sh <every added or modified template.json>` and fix any error. Then ask whether to run the HTML check and, if yes, run `SANITIZER_URL=https://uat.onemail.pagopa.it/v1/emails/sanitize-template bash scripts/sanitize-templates.sh <files>` (requires network). If the sanitizer reports `isSanitized: true`, explain that the HTML must be fixed at the source.
-6. **Refresh the managed templates tree.** Run `bash scripts/generate-template-tree.sh`, then `bash scripts/generate-template-tree.sh --check` to confirm `docs/templates-tree.md` is up to date.
-7. **Review the diff.** Run `git status --short` and `git --no-pager diff --stat` and make sure only the expected files changed.
+6. **Validate.** Run `bash scripts/validate-templates.sh <every added or modified template.json>` and fix any error. Then ask whether to run the HTML check and, if yes, run `SANITIZER_URL=https://uat.onemail.pagopa.it/v1/emails/sanitize-template bash scripts/sanitize-templates.sh <files>` (requires network). If the sanitizer reports `isSanitized: true`, explain that the HTML must be fixed at the source.
+7. **Refresh the managed templates tree.** Run `bash scripts/generate-template-tree.sh`, then `bash scripts/generate-template-tree.sh --check` to confirm `docs/templates-tree.md` is up to date.
+8. **Review the diff.** Run `git status --short` and `git --no-pager diff --stat` and make sure only the expected files changed.
 
 ## Output Format
 
 End with a summary in the user's language containing:
 
 1. **Changed files**: list of added/modified/deleted paths (templates, `docs/templates-tree.md`).
-2. **Checks**: result of `validate-templates.sh`, `sanitize-templates.sh` (or "not run"), and `generate-template-tree.sh --check`.
+2. **Checks**: verified OneMail tenant and configured environments (or "not required"), result of `validate-templates.sh`, `sanitize-templates.sh` (or "not run"), and `generate-template-tree.sh --check`.
 3. **Suggested commands** for the user (not executed), e.g.:
    ```bash
    git config core.hooksPath .githooks                  # once per clone, if `git config core.hooksPath` is not already .githooks
@@ -53,4 +54,4 @@ End with a summary in the user's language containing:
    git push -u origin <branch>
    ```
 4. **PR description draft** following `.github/pull_request_template.md`: fill client, every template path, tick the right operation, write the summary, and tick the checklist items that you verified.
-5. **Warnings**: new clients needing an SES tenant, in-place updates of templates possibly used in production, deletions that need consumer coordination.
+5. **Warnings**: tenant configuration does not prove deployment, in-place updates of templates possibly used in production, deletions that need consumer coordination.
