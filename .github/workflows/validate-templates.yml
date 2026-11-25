@@ -74,7 +74,7 @@ jobs:
           set -euo pipefail
           bash ../main_checkout/scripts/generate-template-tree.sh --check
 
-      - name: Check single client scope
+      - name: Check single client scope and OneMail tenant
         if: steps.selection.outputs.all_files != '[]'
         shell: bash
         working-directory: feature_checkout
@@ -84,6 +84,9 @@ jobs:
           set -euo pipefail
           mapfile -d '' -t files < <(jq -j '.[] | ., "\u0000"' <<< "$FILES")
           bash ../main_checkout/scripts/check-single-client.sh "${files[@]}"
+          client=${files[0]#templates/}
+          client=${client%%/*}
+          bash ../main_checkout/scripts/check-onemail-tenant.sh "$client"
 
       - name: Validate changed templates with main branch script
         if: steps.selection.outputs.files_to_validate != '[]'

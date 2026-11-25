@@ -12,6 +12,10 @@ The workflow selects changed paths under `templates/**` (confined to a single cl
 
 The workflow uses templates data from the pull request, but uses the validation scripts from main branch. This prevents proposed pull request changes to the scripts from being used to validate that same pull request.
 
+## Tenant validation
+
+For any changed template path, including deletions, the client folder must match a top-level tenant key in OneMail's [`tenants.json`](https://github.com/pagopa/onemail/blob/main/src/infra/src/data/tenants/tenants.json). The check fetches the current file directly from `main` and fails if the client is missing or the configuration cannot be retrieved or parsed. This confirms configuration, not deployment to an environment.
+
 ## Managed templates catalog
 
 Every PR runs `generate-template-tree.sh --check` to check if the templates catalog file is up to date, an outdated catalog fails the check. Run `bash scripts/generate-template-tree.sh` locally and include the updated catalog in the PR.
